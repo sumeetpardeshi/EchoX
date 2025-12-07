@@ -1,8 +1,19 @@
-import { supabase } from '../lib/supabase';
+import { supabase, supabaseClient } from '../lib/supabase';
 import { Tweet } from '../types';
 
 const CACHE_TTL_MINUTES = 30;
 const TABLE_NAME = 'trending_topics_v2'; // Use new table structure (one row per trend)
+
+// Get the appropriate Supabase client (server-side or client-side)
+function getSupabaseClient() {
+  if (typeof window !== 'undefined') {
+    // Browser: use client-side client with anon key
+    return supabaseClient;
+  } else {
+    // Server: use service role client
+    return supabase;
+  }
+}
 
 export class CacheService {
   async getTrending(): Promise<{ 
@@ -11,9 +22,15 @@ export class CacheService {
     generatedAt: Date;
     expired?: boolean;
   } | null> {
+    const client = getSupabaseClient();
+    if (!client) {
+      console.warn('Supabase client not available');
+      return null;
+    }
+
     try {
       // First try to get non-expired entries
-      const { data: latestBatch, error: batchError } = await supabase
+      const { data: latestBatch, error: batchError } = await client
         .from(TABLE_NAME)
         .select('generated_at')
         .gt('expires_at', new Date().toISOString())
@@ -23,7 +40,7 @@ export class CacheService {
 
       if (!batchError && latestBatch) {
         // Get all tweets from this batch (non-expired)
-        const { data: tweets, error } = await supabase
+        const { data: tweets, error } = await client
           .from(TABLE_NAME)
           .select('tweet_data, generated_at')
           .eq('generated_at', latestBatch.generated_at)
@@ -41,7 +58,7 @@ export class CacheService {
       }
 
       // If no valid entries, try to get expired entries (stale data)
-      const { data: expiredBatch, error: expiredBatchError } = await supabase
+      const { data: expiredBatch, error: expiredBatchError } = await client
         .from(TABLE_NAME)
         .select('generated_at')
         .order('generated_at', { ascending: false })
@@ -54,7 +71,7 @@ export class CacheService {
       }
 
       // Get all tweets from this batch (even if expired)
-      const { data: tweets, error } = await supabase
+      const { data: tweets, error } = await client
         .from(TABLE_NAME)
         .select('tweet_data, generated_at, expires_at')
         .eq('generated_at', expiredBatch.generated_at)
@@ -90,9 +107,14 @@ export class CacheService {
     generatedAt: Date;
     expired?: boolean;
   } | null> {
+    const client = getSupabaseClient();
+    if (!client) {
+      return null;
+    }
+
     try {
       // Try non-expired first
-      const { data, error } = await supabase
+      const { data, error } = await client
         .from('trending_topics')
         .select('*')
         .gt('expires_at', new Date().toISOString())
@@ -110,7 +132,7 @@ export class CacheService {
       }
 
       // Try expired entries
-      const { data: expiredData, error: expiredError } = await supabase
+      const { data: expiredData, error: expiredError } = await client
         .from('trending_topics')
         .select('*')
         .order('generated_at', { ascending: false })
@@ -135,6 +157,11 @@ export class CacheService {
   }
 
   async saveTrending(tweets: Tweet[]): Promise<void> {
+    const client = getSupabaseClient();
+    if (!client) {
+      throw new Error('Supabase client not available');
+    }
+
     const expiresAt = new Date();
     expiresAt.setMinutes(expiresAt.getMinutes() + CACHE_TTL_MINUTES);
     const generatedAt = new Date().toISOString();
@@ -148,7 +175,7 @@ export class CacheService {
       version: 1
     }));
 
-    const { error } = await supabase
+    const { error } = await client
       .from(TABLE_NAME)
       .insert(records);
 
@@ -160,7 +187,12 @@ export class CacheService {
 
   // Clean up old entries (optional, can run periodically)
   async cleanupOldEntries(): Promise<void> {
-    const { error } = await supabase
+    const client = getSupabaseClient();
+    if (!client) {
+      return;
+    }
+
+    const { error } = await client
       .from(TABLE_NAME)
       .delete()
       .lt('expires_at', new Date().toISOString());
@@ -170,10 +202,17 @@ export class CacheService {
     }
   }
 
-  // Get a single trend by ID
+  // Get a single trend by ID (returns expired entries too, like getTrending)
   async getTrendById(tweetId: string): Promise<Tweet | null> {
+    const client = getSupabaseClient();
+    if (!client) {
+      console.warn('Supabase client not available');
+      return null;
+    }
+
     try {
-      const { data, error } = await supabase
+      // First try to get non-expired entry
+      const { data, error } = await client
         .from(TABLE_NAME)
         .select('tweet_data')
         .eq('tweet_id', tweetId)
@@ -182,11 +221,25 @@ export class CacheService {
         .limit(1)
         .maybeSingle();
 
-      if (error || !data) {
-        return null;
+      if (!error && data) {
+        return data.tweet_data as Tweet;
       }
 
-      return data.tweet_data as Tweet;
+      // If not found or expired, try to get expired entry (stale data)
+      const { data: expiredData, error: expiredError } = await client
+        .from(TABLE_NAME)
+        .select('tweet_data')
+        .eq('tweet_id', tweetId)
+        .order('generated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!expiredError && expiredData) {
+        console.log('⚠️ Found expired story (using stale data)');
+        return expiredData.tweet_data as Tweet;
+      }
+
+      return null;
     } catch (error) {
       console.error('Error fetching trend by ID:', error);
       return null;

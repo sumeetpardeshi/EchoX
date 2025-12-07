@@ -6,6 +6,10 @@
     {
       "source": "/api/(.*)",
       "destination": "/app/api/$1"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ],
   "crons": [

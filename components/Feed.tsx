@@ -3,7 +3,7 @@ import { Tweet } from '../types';
 import { GeminiService } from '../services/geminiService';
 import { audioController } from '../services/audioService';
 import AudioCard from './AudioCard';
-import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Shuffle, Share2 } from 'lucide-react';
 import { GrokVoice } from '../services/xaiService';
 
 interface FeedProps {
@@ -68,12 +68,17 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
     }, 100);
   }, [stopProgressLoop]);
 
-  const handleNext = useCallback(() => {
+  const handleNext = useCallback((fromTrackEnd: boolean = false) => {
     // Track if user is skipping while paused (to not auto-play)
-    const wasPaused = !isPlaying && !isLoading;
-    userSkippedWhilePaused.current = wasPaused;
-    
-    console.log('⏭️ Skip to next, wasPaused:', wasPaused);
+    // But if this is from track end, always allow auto-play
+    if (fromTrackEnd) {
+      userSkippedWhilePaused.current = false;
+      console.log('⏭️ Skip to next (from track end) - will auto-play');
+    } else {
+      const wasPaused = !isPlaying && !isLoading;
+      userSkippedWhilePaused.current = wasPaused;
+      console.log('⏭️ Skip to next, wasPaused:', wasPaused);
+    }
     
     setCurrentIndex((prev) => (prev + 1) % tweets.length);
     // Reset last loaded so the new track loads
@@ -86,9 +91,56 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
     setIsPlaying(false);
     setProgress(100);
     // Auto-advance to next track (this is natural playback end, so always auto-play)
-    userSkippedWhilePaused.current = false;
-    handleNext();
+    handleNext(true); // Pass true to indicate this is from track end
   }, [stopProgressLoop, handleNext]);
+
+  const handleShare = useCallback(async () => {
+    if (!currentTweet) return;
+    
+    const shareUrl = `${window.location.origin}/story/${currentTweet.id}`;
+    const shareTitle = currentTweet.trendTitle || currentTweet.content?.substring(0, 50) || 'EchoX Story';
+    const shareText = currentTweet.summary || currentTweet.content || '';
+    
+    // Try Web Share API first (mobile)
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: shareTitle,
+          text: shareText,
+          url: shareUrl,
+        });
+        console.log('✅ Shared via Web Share API');
+        return;
+      } catch (err) {
+        // User cancelled or error
+        if ((err as Error).name !== 'AbortError') {
+          console.error('Share failed:', err);
+        } else {
+          // User cancelled, don't show error
+          return;
+        }
+      }
+    }
+    
+    // Fallback: Copy to clipboard
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      console.log('✅ Link copied to clipboard');
+      // Show a brief notification (you could replace this with a toast component)
+      const button = document.activeElement as HTMLElement;
+      const originalText = button?.getAttribute('title') || '';
+      if (button) {
+        button.setAttribute('title', 'Link copied!');
+        setTimeout(() => {
+          button.setAttribute('title', originalText || 'Share story');
+        }, 2000);
+      }
+    } catch (err) {
+      console.error('Failed to copy:', err);
+      // Fallback: show URL in prompt
+      prompt('Copy this link:', shareUrl);
+    }
+  }, [currentTweet]);
 
   const playAudio = useCallback(async (buffer: AudioBuffer) => {
     // Set start time to now
@@ -384,8 +436,12 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
             </button>
           </div>
 
-          <button className="text-gray-400 hover:text-white transition-colors">
-            <Repeat size={18} />
+          <button 
+            onClick={handleShare}
+            className="text-gray-400 hover:text-white transition-colors"
+            title="Share story"
+          >
+            <Share2 size={18} />
           </button>
         </div>
       </div>

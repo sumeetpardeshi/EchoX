@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 // Helper to convert MCP URL to proper Supabase URL
 function getSupabaseUrl(url: string): string {
@@ -11,27 +11,39 @@ function getSupabaseUrl(url: string): string {
   return url;
 }
 
+// Get environment variables (support both Vite and Node.js)
+function getEnvVar(key: string): string {
+  if (typeof window !== 'undefined') {
+    // Browser: use Vite env vars
+    return import.meta.env[key] || '';
+  } else {
+    // Node.js: use process.env
+    return process.env[key] || '';
+  }
+}
+
 // Server-side client (uses service role key for admin operations)
-let supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+let supabaseUrl = getEnvVar('SUPABASE_URL') || getEnvVar('NEXT_PUBLIC_SUPABASE_URL') || getEnvVar('VITE_SUPABASE_URL') || '';
 supabaseUrl = supabaseUrl ? getSupabaseUrl(supabaseUrl) : '';
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const supabaseServiceKey = getEnvVar('SUPABASE_SERVICE_ROLE_KEY') || '';
 
 // Only create client if we have the required credentials
-export const supabase = (supabaseUrl && supabaseServiceKey)
+export const supabase: SupabaseClient | null = (supabaseUrl && supabaseServiceKey)
   ? createClient(supabaseUrl, supabaseServiceKey, {
       auth: {
         autoRefreshToken: false,
         persistSession: false
       }
     })
-  : null as any; // Will throw error if used without credentials
+  : null;
 
 // Client-side client (uses anon key for public operations)
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY') || getEnvVar('NEXT_PUBLIC_SUPABASE_ANON_KEY') || '';
+const supabaseClientUrl = getEnvVar('VITE_SUPABASE_URL') || getEnvVar('NEXT_PUBLIC_SUPABASE_URL') || '';
 
-export const supabaseClient = typeof window !== 'undefined' 
+export const supabaseClient: SupabaseClient | null = typeof window !== 'undefined' && supabaseClientUrl && supabaseAnonKey
   ? createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+      getSupabaseUrl(supabaseClientUrl),
       supabaseAnonKey
     )
   : null;
