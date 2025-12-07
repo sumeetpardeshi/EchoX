@@ -500,7 +500,7 @@ async function main() {
         // Save to DB
         console.log(`💾 Saving ${tweets.length} stories to database...`);
         const expiresAt = new Date();
-        expiresAt.setHours(expiresAt.getHours() + 24); // 24 hour expiry for bulk content
+        expiresAt.setHours(expiresAt.getHours() + 48); // 48 hour expiry for bulk content
         const generatedAt = new Date().toISOString();
 
         const records = tweets.map(tweet => ({

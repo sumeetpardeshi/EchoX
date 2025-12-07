@@ -108,7 +108,7 @@ export function useUserFilters(): UseUserFiltersReturn {
   );
   
   const [interests, setInterests] = useState<string[]>(() => 
-    loadFromStorage(INTERESTS_KEY, ['AI', 'Tech', 'Science', 'Startups'])
+    loadFromStorage(INTERESTS_KEY, [...INTEREST_OPTIONS])
   );
 
   // Persist filters to localStorage whenever they change
@@ -131,7 +131,7 @@ export function useUserFilters(): UseUserFiltersReturn {
 
   const resetFilters = useCallback(() => {
     setFilters(DEFAULT_FILTERS);
-    setInterests(['AI', 'Tech', 'Science', 'Startups']);
+    setInterests([...INTEREST_OPTIONS]);
   }, []);
 
   const addFromUser = useCallback((handle: string) => {
@@ -188,8 +188,7 @@ export function useUserFilters(): UseUserFiltersReturn {
   }, []);
 
   const activeFiltersCount = countActiveFilters(filters);
-  const hasCustomFilters = activeFiltersCount > 0 || interests.length !== 4 || 
-    !['AI', 'Tech', 'Science', 'Startups'].every(i => interests.includes(i));
+  const hasCustomFilters = activeFiltersCount > 0 || interests.length !== INTEREST_OPTIONS.length;
 
   return {
     filters,

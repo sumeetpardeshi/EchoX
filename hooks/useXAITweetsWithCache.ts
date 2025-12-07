@@ -144,8 +144,16 @@ export function useXAITweetsWithCache(
           
           // Filter by interests if provided
           if (interestsRef.current && interestsRef.current.length > 0) {
+            console.log('🔍 Filtering results by interests:', interestsRef.current);
+            console.log('   Available topics:', [...new Set(allTweets.map(t => t.topic))].join(', '));
+            
             const filtered = filterTweetsByInterests(allTweets, interestsRef.current);
-            console.log(`✅ Filtered to ${filtered.length} matching interests: ${interestsRef.current.join(", ")}`);
+            console.log(`✅ Filtered from ${allTweets.length} to ${filtered.length} matching items`);
+            
+            if (filtered.length === 0) {
+              console.warn('⚠️ All items were filtered out! Returning original list as fallback.');
+              return allTweets;
+            }
             return filtered;
           }
           
@@ -168,7 +176,13 @@ export function useXAITweetsWithCache(
         
         // Filter by interests if provided
         if (interestsRef.current && interestsRef.current.length > 0) {
-          return filterTweetsByInterests(tweets, interestsRef.current);
+          console.log('🔍 Filtering legacy results by interests:', interestsRef.current);
+          const filtered = filterTweetsByInterests(tweets, interestsRef.current);
+          
+          if (filtered.length > 0) {
+             return filtered;
+          }
+          console.warn('⚠️ All items were filtered out! Returning original list as fallback.');
         }
         
         return tweets;
@@ -200,7 +214,13 @@ export function useXAITweetsWithCache(
       
       // Filter by interests if provided
       if (interestsRef.current && interestsRef.current.length > 0) {
-        return filterTweetsByInterests(tweets, interestsRef.current);
+        console.log('🔍 Filtering fresh results by interests:', interestsRef.current);
+        const filtered = filterTweetsByInterests(tweets, interestsRef.current);
+        
+        if (filtered.length > 0) {
+           return filtered;
+        }
+        console.warn('⚠️ All items were filtered out! Returning original list as fallback.');
       }
       
       return tweets;
