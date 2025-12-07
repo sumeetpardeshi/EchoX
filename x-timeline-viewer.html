@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>X User Timeline Viewer</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        input, button { margin: 10px 0; padding: 8px; }
+        #posts { border: 1px solid #ddd; padding: 10px; max-height: 600px; overflow-y: auto; }
+        .post { border-bottom: 1px solid #eee; padding: 10px 0; }
+        .post:last-child { border-bottom: none; }
+        .author { font-weight: bold; color: #1da1f2; }
+        .date { color: #666; font-size: 0.9em; }
+        .metrics { font-size: 0.8em; color: #888; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>X User Timeline Viewer</h1>
+    <p>Enter a username and number of posts (max 3200):</p>
+    <input type="text" id="username" placeholder="e.g., elonmusk" value="elonmusk">
+    <input type="number" id="count" placeholder="e.g., 20" value="20" min="1" max="3200">
+    <button onclick="fetchTimeline()">Fetch Timeline</button>
+    <div id="loading" style="display: none;">Loading...</div>
+    <div id="error" class="error" style="display: none;"></div>
+    <div id="posts"></div>
+
+    <script>
+        // Replace with your actual USER-context Bearer Token from X (OAuth 2.0 PKCE or OAuth 1.0a user)
+        const BEARER_TOKEN = 'AAAAAAAAAAAAAAAAAAAAABF25wEAAAAAX9ZMxYSrK%2F1cwlapCcRSFpRojnE%3DHpmMzEUqsT0F6qWTGe7pfTO3i3qvWfUaAniYTaIrPTjiUwWevJ';
+        // Use the Vite dev proxy to bypass CORS. Run `npm run dev` and open the served URL (not file://)
+        const API_BASE = '/api/twitter/2';
+        const LOOKBACK_DAYS = 3;
+        const SAMPLE_SIZE = 200; // Max accounts to sample when following > 200
+        const TWEETS_PER_ACCOUNT = 5;
+
+        async function fetchTimeline() {
+            const username = document.getElementById('username').value.trim();
+            const count = parseInt(document.getElementById('count').value) || 20;
+            if (!username) return showError('Username required');
+
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('posts').innerHTML = '';
+
+            try {
+                if (!BEARER_TOKEN) throw new Error('Set BEARER_TOKEN to a user-context token first');
+                const posts = await buildSyntheticFeed(username, count);
+                renderPosts(posts);
+            } catch (err) {
+                showError(err.message);
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+
+        async function buildSyntheticFeed(username, desiredCount) {
+            // 1) Resolve user ID
+            const userResponse = await fetch(`${API_BASE}/users/by/username/${encodeURIComponent(username)}?user.fields=description`, {
+                headers: { 'Authorization': `Bearer ${BEARER_TOKEN}` }
+            });
+            if (!userResponse.ok) throw new Error(`User fetch failed: ${userResponse.status}`);
+            const userData = await userResponse.json();
+            if (!userData.data) throw new Error('User not found');
+            const userId = userData.data.id;
+            const authorInfo = { name: userData.data.name, username: userData.data.username };
+
+            // 2) Fetch following (up to 1000)
+            const following = await fetchFollowing(userId, 1000);
+            const followCount = following.length;
+
+            // 3) Select accounts: random sample if >200, else top by followers
+            let selected = following;
+            if (followCount > 200) {
+                selected = reservoirSample(following, SAMPLE_SIZE);
+            } else if (followCount > 0) {
+                selected = [...following].sort((a, b) => (b.public_metrics?.followers_count || 0) - (a.public_metrics?.followers_count || 0)).slice(0, SAMPLE_SIZE);
+            }
+
+            // 4) Fetch tweets from last LOOKBACK_DAYS for selected accounts (batched)
+            const sinceISO = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
+            const posts = [];
+            const batchSize = 8;
+            for (let i = 0; i < selected.length; i += batchSize) {
+                const batch = selected.slice(i, i + batchSize);
+                const results = await Promise.all(batch.map(u => fetchUserTweets(u.id, sinceISO, TWEETS_PER_ACCOUNT)));
+                results.forEach(arr => posts.push(...arr));
+            }
+
+            // 5) Sort newest first and trim
+            posts.sort((a, b) => new Date(b.created_at || b.timestamp).getTime() - new Date(a.created_at || a.timestamp).getTime());
+            return posts.slice(0, desiredCount).map(p => ({
+                ...p,
+                authorFallback: authorInfo
+            }));
+        }
+
+        async function fetchFollowing(userId, maxToFetch = 400) {
+            let nextToken;
+            const collected = [];
+            while (collected.length < maxToFetch) {
+                const url = new URL(`${API_BASE}/users/${encodeURIComponent(userId)}/following`, window.location.origin);
+                url.searchParams.set('max_results', '1000');
+                url.searchParams.set('user.fields', 'profile_image_url,verified,public_metrics');
+                if (nextToken) url.searchParams.set('pagination_token', nextToken);
+
+                const res = await fetch(url.toString(), { headers: { 'Authorization': `Bearer ${BEARER_TOKEN}` } });
+                const text = await res.text();
+                if (!res.ok) throw new Error(`Following fetch failed: ${res.status} - ${text}`);
+                const json = JSON.parse(text);
+                if (json.data) collected.push(...json.data);
+                nextToken = json.meta?.next_token;
+                if (!nextToken) break;
+            }
+            return collected.slice(0, maxToFetch);
+        }
+
+        async function fetchUserTweets(userId, sinceISO, limit = 10) {
+            const params = new URLSearchParams({
+                max_results: Math.min(100, limit),
+                start_time: sinceISO,
+                'tweet.fields': 'created_at,public_metrics',
+                expansions: 'author_id',
+                'user.fields': 'name,username,profile_image_url'
+            });
+            const res = await fetch(`${API_BASE}/users/${encodeURIComponent(userId)}/tweets?${params}`, {
+                headers: { 'Authorization': `Bearer ${BEARER_TOKEN}` }
+            });
+            const text = await res.text();
+            if (!res.ok) throw new Error(`User tweets fetch failed: ${res.status} - ${text}`);
+            const json = JSON.parse(text);
+            const userMap = new Map();
+            json.includes?.users?.forEach(u => userMap.set(u.id, u));
+            return (json.data || []).map(t => ({
+                ...t,
+                author: userMap.get(t.author_id)
+            }));
+        }
+
+        function reservoirSample(arr, k) {
+            if (k >= arr.length) return [...arr];
+            const result = arr.slice(0, k);
+            for (let i = k; i < arr.length; i++) {
+                const j = Math.floor(Math.random() * (i + 1));
+                if (j < k) result[j] = arr[i];
+            }
+            return result;
+        }
+
+        function renderPosts(posts) {
+            const postsDiv = document.getElementById('posts');
+            postsDiv.innerHTML = '';
+            posts.forEach(post => {
+                const author = post.author || post.authorFallback || {};
+                const metrics = post.public_metrics || {};
+                const postDiv = document.createElement('div');
+                postDiv.className = 'post';
+                postDiv.innerHTML = `
+                    <div class="author">@${author.username || 'unknown'} (${author.name || 'Unknown'})</div>
+                    <div class="date">${new Date(post.created_at || post.timestamp).toLocaleString()}</div>
+                    <div>${post.text}</div>
+                    <div class="metrics">
+                        💙 ${metrics.like_count || 0} | 🔄 ${metrics.retweet_count || 0} | 💬 ${metrics.reply_count || 0} | ➡️ ${metrics.quote_count || 0}
+                    </div>
+                `;
+                postsDiv.appendChild(postDiv);
+            });
+            if (posts.length === 0) postsDiv.innerHTML = '<p>No posts found.</p>';
+        }
+
+        function showError(msg) {
+            document.getElementById('error').innerHTML = `Error: ${msg}`;
+            document.getElementById('error').style.display = 'block';
+        }
+    </script>
+</body>
+</html>

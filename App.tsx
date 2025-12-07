@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Navbar from './components/Navbar';
 import Feed from './components/Feed';
 import Search from './components/Search';
@@ -6,11 +6,14 @@ import { Tab } from './types';
 import { GeminiService } from './services/geminiService';
 import { audioController } from './services/audioService';
 import { useXAITweets } from './hooks/useXAITweets';
+import { useXAuth } from './hooks/useXAuth';
 import { Menu, X, Settings, Info, Volume2, Zap, RefreshCw, Play } from 'lucide-react';
 
 // Get API keys from environment variables
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const XAI_API_KEY = process.env.XAI_API_KEY || '';
+const X_CLIENT_ID = process.env.X_CLIENT_ID || '';
+const X_REDIRECT_URI = process.env.X_REDIRECT_URI || (typeof window !== 'undefined' ? window.location.origin : '');
 
 // Debug: Log API key status on load
 console.log('API Keys loaded:', {
@@ -22,6 +25,7 @@ const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<Tab>(Tab.Trending);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isAudioUnlocked, setIsAudioUnlocked] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   // Unlock audio on user interaction (required by browsers)
   const handleStartListening = async () => {
@@ -40,6 +44,20 @@ const App: React.FC = () => {
     return new GeminiService(GEMINI_API_KEY);
   }, []);
 
+  // X OAuth (PKCE) helper
+  const { token: xBearerToken, isLoading: isAuthLoading, error: authError, startAuth, clearToken, setManualToken } = useXAuth({
+    clientId: X_CLIENT_ID,
+    redirectUri: X_REDIRECT_URI,
+    scopes: ['tweet.read', 'users.read', 'follows.read', 'offline.access'],
+  });
+  const [manualTokenInput, setManualTokenInput] = useState('');
+
+  useEffect(() => {
+    if (xBearerToken) {
+      setManualTokenInput(xBearerToken);
+    }
+  }, [xBearerToken]);
+
   // Use xAI for live tweets (falls back to mock data if no key)
   const { 
     trendingTweets, 
@@ -47,8 +65,16 @@ const App: React.FC = () => {
     isLoading: isLoadingTweets, 
     refetchTrending,
     refetchMyFeed,
-    isUsingLiveData 
-  } = useXAITweets(XAI_API_KEY || null);
+    isUsingLiveData,
+    isUsingAuthedFeed,
+    xProfile,
+    xAuthError,
+  } = useXAITweets(XAI_API_KEY || null, xBearerToken);
+
+  const isSignedIn = !!xProfile;
+  const myFeedTitle = isSignedIn 
+    ? `@${xProfile?.username}'s Home Timeline` 
+    : 'My Feed • Sign in to X';
 
   // Show splash screen until audio is unlocked
   if (!isAudioUnlocked) {
@@ -162,6 +188,29 @@ const App: React.FC = () => {
               )}
             </div>
 
+            {/* X Sign-in */}
+            <div className="px-4 py-3 border-b border-white/5 mb-2 space-y-1">
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col">
+                  <span className="text-xs font-semibold text-white">My X Timeline</span>
+                  <span className="text-[10px] text-gray-500">
+                    {isSignedIn 
+                      ? `Signed in as @${xProfile?.username}` 
+                      : 'Paste your X bearer token to read your Home timeline aloud'}
+                  </span>
+                  {(xAuthError || authError) && (
+                    <span className="text-[10px] text-red-400">{xAuthError || authError}</span>
+                  )}
+                </div>
+                <button
+                  onClick={() => setIsAuthModalOpen(true)}
+                  className="text-[11px] font-bold bg-white text-black px-3 py-1.5 rounded-full hover:scale-105 transition-transform"
+                >
+                  {isSignedIn ? 'Manage' : 'Connect'}
+                </button>
+              </div>
+            </div>
+
             {/* Refresh Button */}
             {XAI_API_KEY && (
               <button 
@@ -204,6 +253,22 @@ const App: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 w-full relative">
+        {currentTab === Tab.MyFeed && !isSignedIn && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30">
+            <div className="flex items-center gap-2 bg-white/10 backdrop-blur-md border border-white/10 px-4 py-2 rounded-full shadow-lg">
+              <span className="text-[11px] text-white">
+                Connect X to stream your Home timeline with rotating voices
+              </span>
+              <button
+                onClick={() => setIsAuthModalOpen(true)}
+                className="text-[11px] font-bold bg-white text-black px-3 py-1 rounded-full hover:scale-105 transition-transform"
+              >
+                Connect
+              </button>
+            </div>
+          </div>
+        )}
+
         {currentTab === Tab.Trending && (
           <Feed 
             tweets={trendingTweets} 
@@ -216,7 +281,7 @@ const App: React.FC = () => {
           <Feed 
             tweets={myFeedTweets} 
             geminiService={geminiService} 
-            feedTitle={isUsingLiveData ? "Live Feed" : "My Feed"}
+            feedTitle={myFeedTitle}
           />
         )}
         
@@ -227,6 +292,96 @@ const App: React.FC = () => {
 
       {/* Navigation */}
       <Navbar currentTab={currentTab} onTabChange={setCurrentTab} />
+
+      {/* X Sign-in Modal */}
+      {isAuthModalOpen && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center px-4"
+          onClick={() => setIsAuthModalOpen(false)}
+        >
+          <div 
+            className="w-full max-w-xl bg-gray-900 border border-white/10 rounded-2xl shadow-2xl p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-1">
+                <h3 className="text-lg font-bold text-white">Connect your X account</h3>
+                <p className="text-[12px] text-gray-400">
+                  Paste a user Bearer token (OAuth user context) so we can call the X Home Timeline endpoint and read it aloud with rotating voices.
+                </p>
+              </div>
+              <button 
+                className="p-1 hover:bg-white/10 rounded-lg transition-colors"
+                onClick={() => setIsAuthModalOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <label className="text-[11px] text-gray-300 font-medium">Paste bearer token (optional)</label>
+              <textarea
+                value={manualTokenInput}
+                onChange={(e) => setManualTokenInput(e.target.value)}
+                placeholder="Paste your user bearer token (OAuth 2.0 user context)"
+                className="w-full h-24 bg-black/40 border border-white/10 rounded-lg text-sm text-white p-3 focus:outline-none focus:ring-2 focus:ring-white/30"
+              />
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={() => {
+                    if (manualTokenInput.trim()) {
+                      setManualToken(manualTokenInput);
+                      setIsAuthModalOpen(false);
+                    }
+                  }}
+                  disabled={!manualTokenInput.trim()}
+                  className="text-sm px-4 py-2 rounded-full bg-white text-black font-bold hover:scale-105 transition-transform disabled:opacity-60 disabled:hover:scale-100"
+                >
+                  Use pasted token
+                </button>
+                <span className="text-[11px] text-gray-500">Must be a user-context token (not app-only).</span>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={startAuth}
+                disabled={!X_CLIENT_ID || !X_REDIRECT_URI || isAuthLoading}
+                className="w-full flex items-center justify-center gap-2 bg-white text-black font-bold px-4 py-3 rounded-lg hover:scale-105 transition-transform disabled:opacity-60 disabled:hover:scale-100"
+              >
+                {isAuthLoading ? 'Connecting…' : 'Sign in with X'}
+              </button>
+              <p className="text-[11px] text-gray-400">
+                We use OAuth 2.0 Authorization Code with PKCE. Make sure <code className="font-mono">X_CLIENT_ID</code> and <code className="font-mono">X_REDIRECT_URI</code> are set in your env.
+              </p>
+            </div>
+            {(xAuthError || authError) && (
+              <p className="text-[12px] text-red-400">{xAuthError || authError}</p>
+            )}
+
+            <div className="flex items-center justify-between">
+              <button
+                onClick={() => { clearToken(); setIsAuthModalOpen(false); }}
+                className="text-[12px] text-gray-300 hover:text-white underline disabled:opacity-50"
+                disabled={!xBearerToken}
+              >
+                Disconnect
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsAuthModalOpen(false)}
+                  className="text-sm px-4 py-2 rounded-full border border-white/10 text-white hover:bg-white/10 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+            <p className="text-[11px] text-gray-500">
+              We call the X Home Timeline endpoint directly from your browser. Remove the token anytime via Disconnect.
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

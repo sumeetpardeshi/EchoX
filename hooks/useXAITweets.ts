@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Tweet } from '../types';
 import { XAIService, initXAIService } from '../services/xaiService';
+import { XProfile, initTwitterService, TwitterService } from '../services/twitterService';
 
 interface UseXAITweetsReturn {
   trendingTweets: Tweet[];
@@ -10,9 +11,15 @@ interface UseXAITweetsReturn {
   refetchTrending: () => Promise<void>;
   refetchMyFeed: () => Promise<void>;
   isUsingLiveData: boolean;
+  isUsingAuthedFeed: boolean;
+  xProfile: XProfile | null;
+  xAuthError: string | null;
 }
 
-export function useXAITweets(xaiApiKey: string | null): UseXAITweetsReturn {
+export function useXAITweets(
+  xaiApiKey: string | null,
+  twitterBearerToken: string | null = null,
+): UseXAITweetsReturn {
   // Start with empty arrays - we fetch everything live
   const [trendingTweets, setTrendingTweets] = useState<Tweet[]>([]);
   const [myFeedTweets, setMyFeedTweets] = useState<Tweet[]>([]);
@@ -20,6 +27,10 @@ export function useXAITweets(xaiApiKey: string | null): UseXAITweetsReturn {
   const [error, setError] = useState<string | null>(null);
   const [xaiService, setXaiService] = useState<XAIService | null>(null);
   const [isUsingLiveData, setIsUsingLiveData] = useState(false);
+  const [isUsingAuthedFeed, setIsUsingAuthedFeed] = useState(false);
+  const [xProfile, setXProfile] = useState<XProfile | null>(null);
+  const [xAuthError, setXAuthError] = useState<string | null>(null);
+  const [twitterService, setTwitterService] = useState<TwitterService | null>(null);
 
   // Initialize xAI service when API key is available
   useEffect(() => {
@@ -31,6 +42,37 @@ export function useXAITweets(xaiApiKey: string | null): UseXAITweetsReturn {
       setError('XAI API key not configured');
     }
   }, [xaiApiKey]);
+
+  // Initialize Twitter service when bearer token is provided
+  useEffect(() => {
+    const connect = async () => {
+      if (!twitterBearerToken) {
+        setTwitterService(null);
+        setXProfile(null);
+        setIsUsingAuthedFeed(false);
+        setXAuthError(null);
+        return;
+      }
+
+      try {
+        const service = initTwitterService(twitterBearerToken);
+        const profile = await service.fetchCurrentUser();
+        setTwitterService(service);
+        setXProfile(profile);
+        setIsUsingAuthedFeed(true);
+        setIsUsingLiveData(true);
+        setXAuthError(null);
+      } catch (err) {
+        console.error('❌ X auth failed', err);
+        setTwitterService(null);
+        setXProfile(null);
+        setIsUsingAuthedFeed(false);
+        setXAuthError(err instanceof Error ? err.message : 'Could not verify X token');
+      }
+    };
+
+    connect();
+  }, [twitterBearerToken]);
 
   // Fetch trending topics
   const refetchTrending = useCallback(async () => {
@@ -59,6 +101,31 @@ export function useXAITweets(xaiApiKey: string | null): UseXAITweetsReturn {
 
   // Fetch personalized feed
   const refetchMyFeed = useCallback(async () => {
+    // Prefer the authenticated X feed when available
+    if (twitterService && xProfile) {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const tweets = await twitterService.fetchHomeTimeline(xProfile.id, 20);
+        if (tweets.length > 0) {
+          setMyFeedTweets(tweets);
+          setIsUsingLiveData(true);
+          setIsUsingAuthedFeed(true);
+          console.log(`✅ Loaded ${tweets.length} posts from X home timeline`);
+        } else {
+          setError('No posts found in your X home timeline');
+          setIsUsingAuthedFeed(true);
+        }
+      } catch (err) {
+        console.error('❌ Error fetching X home timeline:', err);
+        setError('Failed to fetch your X feed');
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
     if (!xaiService) return;
 
     setIsLoading(true);
@@ -80,18 +147,24 @@ export function useXAITweets(xaiApiKey: string | null): UseXAITweetsReturn {
     } finally {
       setIsLoading(false);
     }
-  }, [xaiService]);
+  }, [xaiService, twitterService, xProfile]);
 
   // Auto-fetch when service becomes available
   useEffect(() => {
-    if (xaiService && !isUsingLiveData) {
-      // Fetch both feeds in parallel
+    if (xaiService) {
       Promise.all([
         refetchTrending(),
         refetchMyFeed(),
       ]).catch(console.error);
     }
-  }, [xaiService, isUsingLiveData, refetchTrending, refetchMyFeed]);
+  }, [xaiService, refetchTrending, refetchMyFeed]);
+
+  // Fetch real X feed as soon as auth succeeds
+  useEffect(() => {
+    if (twitterService && xProfile) {
+      refetchMyFeed().catch(console.error);
+    }
+  }, [twitterService, xProfile, refetchMyFeed]);
 
   return {
     trendingTweets,
@@ -101,6 +174,8 @@ export function useXAITweets(xaiApiKey: string | null): UseXAITweetsReturn {
     refetchTrending,
     refetchMyFeed,
     isUsingLiveData,
+    isUsingAuthedFeed,
+    xProfile,
+    xAuthError,
   };
 }
-

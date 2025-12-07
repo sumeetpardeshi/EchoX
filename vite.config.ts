@@ -15,6 +15,12 @@ export default defineConfig(({ mode }) => {
             rewrite: (path) => path.replace(/^\/api\/xai/, ''),
             secure: true,
           },
+          '/api/twitter': {
+            target: 'https://api.x.com',
+            changeOrigin: true,
+            rewrite: (path) => path.replace(/^\/api\/twitter/, ''),
+            secure: true,
+          },
         },
       },
       plugins: [react()],
