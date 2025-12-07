@@ -24,18 +24,38 @@ if (existsSync(envLocalPath)) {
 }
 
 // Direct XAI API call (no service dependencies)
-async function fetchTrendingFromXAI(interests?: string[]): Promise<any[]> {
+async function fetchTrendingFromXAI(interests?: string[], seenTitles: Set<string> = new Set()): Promise<any[]> {
   const xaiKey = process.env.XAI_API_KEY;
   if (!xaiKey) {
     throw new Error('XAI_API_KEY not found');
   }
+
+  // Define sub-angles to force diversity if specific interest is provided
+  const ANGLES: Record<string, string[]> = {
+    'Tech': ['Startups & VC', 'Consumer Gadgets', 'Software & Apps', 'Big Tech Policy', 'Developer Tools'],
+    'AI': ['LLM Breakthroughs', 'AI Ethics & Safety', 'New AI Product Launches', 'Robotics & Hardware', 'Generative Art'],
+    'Space': ['Commercial Spaceflight', 'Astronomy Discoveries', 'Mars & Moon Missions', 'Satellite Technology'],
+    'Crypto': ['DeFi & Web3', 'Regulatory News', 'Market Movements', 'NFTs & Gaming', 'Infrastructure'],
+    'Sports': ['Major League Games', 'Athlete News', 'Trade Rumors', 'Tournament Updates'],
+    'Politics': ['Policy Changes', 'Elections & Campaigns', 'International Relations', 'Domestic Issues'],
+    'Entertainment': ['Movie Releases', 'Music Industry', 'Celebrity News', 'Streaming Trends'],
+    'Science': ['Biology & Medicine', 'Physics Breakthroughs', 'Climate & Environment', 'Archaeology'],
+    'Business': ['Market Trends', 'Company Earnings', 'Economic Indicators', 'Mergers & Acquisitions'],
+    'Gaming': ['New Game Releases', 'Esports', 'Console Updates', 'Indie Games'],
+    'Breaking': ['Global Events', 'Major Announcements', 'Emerging Stories']
+  };
 
   // Build search scope based on interests (matching xaiService.ts logic)
   let searchScope: string;
   let topicList: string;
   
   if (interests && interests.length > 0) {
-    searchScope = `the most significant stories and conversations in these areas: ${interests.join(", ")}`;
+    // If a single interest is provided, try to pick a random angle to ensure variety
+    const interest = interests[0];
+    const subAngles = ANGLES[interest];
+    const angle = subAngles ? subAngles[Math.floor(Math.random() * subAngles.length)] : '';
+    
+    searchScope = `the most significant stories in ${interest}${angle ? ` specifically focusing on ${angle}` : ''}`;
     topicList = interests.join("|");
   } else {
     searchScope = "the most significant trending topics, stories, or conversations happening today";
@@ -43,7 +63,7 @@ async function fetchTrendingFromXAI(interests?: string[]): Promise<any[]> {
   }
 
   const prompt = `You are a podcast host creating short audio snippets about what's trending on X/Twitter RIGHT NOW.
-
+    
 Search across X/Twitter to find the TOP 15 ${searchScope}.
 
 For EACH trending topic, create a podcast-style narration (2-3 sentences) that:
@@ -85,6 +105,8 @@ Return the results in this EXACT JSON format:
 Requirements:
 - Find ACTUALLY trending topics right now (not generic content)
 ${interests && interests.length > 0 ? `- Focus ONLY on topics related to: ${interests.join(", ")}` : "- Include a diverse mix of categories (tech, politics, sports, entertainment, etc.)"}
+- DIVERSITY IS KEY: Ensure the stories cover different sub-topics.
+- NO REPETITION: Do not output stories about the same event.
 - The podcastScript should be engaging and informative, suitable for audio
 - imagePrompt must visually represent the story in podcastScript
 - Include real tweets from notable/verified accounts
@@ -381,24 +403,26 @@ async function generateAudioAndImagesForTweets(
 async function main() {
   console.log('🚀 Populating database with trending topics...\n');
 
+  // Define Categories to iterate over
+  const CATEGORIES = [
+    'Tech', 'AI', 'Space', 'Crypto', 'Sports', 
+    'Politics', 'Entertainment', 'Science', 'Business', 'Gaming'
+  ];
+
   // Parse interests from command line args or environment variable
   // Usage: npm run populate-db -- --interests Tech,Crypto
   // Or: INTERESTS=Tech,Crypto npm run populate-db
   const args = process.argv.slice(2);
-  let interests: string[] | undefined;
+  let targetCategories: string[] = CATEGORIES;
   
   const interestsIndex = args.indexOf('--interests');
   if (interestsIndex !== -1 && args[interestsIndex + 1]) {
-    interests = args[interestsIndex + 1].split(',').map(i => i.trim()).filter(i => i.length > 0);
+    targetCategories = args[interestsIndex + 1].split(',').map(i => i.trim()).filter(i => i.length > 0);
   } else if (process.env.INTERESTS) {
-    interests = process.env.INTERESTS.split(',').map(i => i.trim()).filter(i => i.length > 0);
+    targetCategories = process.env.INTERESTS.split(',').map(i => i.trim()).filter(i => i.length > 0);
   }
 
-  if (interests && interests.length > 0) {
-    console.log(`🎯 Filtering by interests: ${interests.join(", ")}\n`);
-  } else {
-    console.log('📰 Fetching all trending topics (no interest filter)\n');
-  }
+  console.log(`🎯 Targeting categories: ${targetCategories.join(", ")}\n`);
 
   // Check environment
   const xaiKey = process.env.XAI_API_KEY;
@@ -433,95 +457,88 @@ async function main() {
       auth: { autoRefreshToken: false, persistSession: false }
     });
 
-    // Fetch trending topics with interests filter
-    console.log('📰 Fetching trending topics from XAI...');
-    if (interests && interests.length > 0) {
-      console.log(`   Filtering for: ${interests.join(", ")}`);
+    const seenTitles = new Set<string>();
+    let totalSaved = 0;
+
+    // Iterate through each category
+    for (const category of targetCategories) {
+      console.log(`\n==========================================`);
+      console.log(`📂 Processing Category: ${category}`);
+      console.log(`==========================================\n`);
+
+      try {
+        console.log(`📰 Fetching trends for ${category}...`);
+        
+        // Pass the single category (as array) and the seen set
+        let tweets = await fetchTrendingFromXAI([category], seenTitles);
+        
+        // Filter out duplicates based on title similarity
+        tweets = tweets.filter(t => {
+          // Create a simplified key: lowercase, first 20 chars
+          const key = (t.trendTitle || t.content || '').toLowerCase().substring(0, 20);
+          if (seenTitles.has(key)) {
+            console.log(`   ⚠️ Skipping duplicate: "${t.trendTitle}"`);
+            return false;
+          }
+          seenTitles.add(key);
+          return true;
+        });
+
+        // Limit to top 10 unique stories per category
+        tweets = tweets.slice(0, 10);
+        console.log(`✅ Found ${tweets.length} unique trends for ${category}`);
+
+        if (tweets.length === 0) {
+          console.warn(`⚠️ No new unique trends found for ${category}, skipping...`);
+          continue;
+        }
+
+        // Generate Audio & Images
+        console.log(`🎤 Generating media for ${category}...`);
+        tweets = await generateAudioAndImagesForTweets(tweets, xaiKey, supabase);
+        
+        // Save to DB
+        console.log(`💾 Saving ${tweets.length} stories to database...`);
+        const expiresAt = new Date();
+        expiresAt.setHours(expiresAt.getHours() + 24); // 24 hour expiry for bulk content
+        const generatedAt = new Date().toISOString();
+
+        const records = tweets.map(tweet => ({
+          tweet_id: tweet.id,
+          generated_at: generatedAt,
+          expires_at: expiresAt.toISOString(),
+          tweet_data: { ...tweet, topic: category }, // Ensure topic is set correctly
+          version: 1
+        }));
+
+        const { error } = await supabase
+          .from('trending_topics_v2')
+          .insert(records);
+
+        if (error) throw error;
+        
+        console.log(`✅ Saved ${records.length} stories for ${category}!`);
+        totalSaved += records.length;
+
+        // Small delay between categories to be nice to APIs
+        if (targetCategories.indexOf(category) < targetCategories.length - 1) {
+          console.log('⏳ Waiting 2 seconds before next category...');
+          await new Promise(r => setTimeout(r, 2000));
+        }
+
+      } catch (catError) {
+        console.error(`❌ Failed to process category ${category}:`, catError);
+        // Continue to next category
+      }
     }
-    console.log('   This may take 30-60 seconds...\n');
-    
-    let tweets = await fetchTrendingFromXAI(interests);
-    console.log(`✅ Fetched ${tweets.length} trending topics\n`);
 
-    if (tweets.length === 0) {
-      console.error('❌ No trending topics found');
-      process.exit(1);
-    }
-
-    // Display what we got
-    console.log('📋 Topics fetched:');
-    tweets.forEach((tweet, i) => {
-      const title = tweet.trendTitle || tweet.content?.substring(0, 40) || 'Untitled';
-      console.log(`   ${i + 1}. ${title}`);
-    });
-    console.log('');
-
-    // Generate audio and images for all tweets (using podcastScript and imagePrompt from XAI)
-    console.log('🎤 Generating audio and images for all trends...');
-    console.log('   Using podcastScript and imagePrompt from XAI');
-    console.log('   This may take 3-5 minutes (5 trends × ~40-60 seconds each)...\n');
-    
-    tweets = await generateAudioAndImagesForTweets(tweets, xaiKey, supabase);
-    
-    const audioCount = tweets.filter(t => t.audioUrl).length;
-    const generatedImageCount = tweets.filter(t => t.imageUrl && !t.imageUrl.startsWith('data:image/svg')).length;
-    console.log(`\n✅ Generated audio for ${audioCount}/${tweets.length} trends`);
-    console.log(`✅ Generated images for ${generatedImageCount}/${tweets.length} trends\n`);
-
-    // Save to database (one row per trend, now with audioUrl)
-    console.log('💾 Saving to database (one row per trend with audio)...');
-    const expiresAt = new Date();
-    expiresAt.setMinutes(expiresAt.getMinutes() + 30);
-    const generatedAt = new Date().toISOString();
-
-    // Insert each tweet as a separate row
-    const records = tweets.map(tweet => ({
-      tweet_id: tweet.id,
-      generated_at: generatedAt,
-      expires_at: expiresAt.toISOString(),
-      tweet_data: tweet,
-      version: 1
-    }));
-
-    const { error } = await supabase
-      .from('trending_topics_v2')
-      .insert(records);
-
-    if (error) {
-      throw error;
-    }
-
-    console.log(`✅ Saved ${records.length} trends to database (as separate rows)!\n`);
-
-    // Verify it was saved
-    console.log('🔍 Verifying...');
-    const { data: cached, error: verifyError } = await supabase
-      .from('trending_topics_v2')
-      .select('tweet_id, generated_at')
-      .eq('generated_at', generatedAt)
-      .gt('expires_at', new Date().toISOString());
-
-    if (cached && !verifyError) {
-      console.log(`✅ Verified: ${cached.length} topics in cache`);
-      console.log(`   Generated at: ${new Date(generatedAt).toLocaleString()}\n`);
-    }
-
-    // Summary
-    const finalImageCount = tweets.filter(t => t.imageUrl && !t.imageUrl.startsWith('data:image/svg')).length;
+    console.log('\n' + '='.repeat(50));
+    console.log(`🎉 COMPLETED! Total stories saved: ${totalSaved}`);
     console.log('='.repeat(50));
-    console.log('✅ Successfully cached trending topics with audio and images!');
-    console.log(`   - Topics: ${tweets.length}`);
-    console.log(`   - With audio: ${audioCount}`);
-    console.log(`   - With images: ${finalImageCount}`);
-    console.log('='.repeat(50));
-    console.log('\n🎉 Done! Users will now get instant audio playback!\n');
-    console.log('💡 Next: Restart your dev server and audio will play instantly!\n');
+    console.log('\n💡 Next: Restart your dev server and check the feed!\n');
 
   } catch (error) {
-    console.error('❌ Error:', error);
-    if (error instanceof Error) {
-      console.error('   Message:', error.message);
-    }
+    console.error('❌ Fatal Error:', error);
     process.exit(1);
   }
 }
