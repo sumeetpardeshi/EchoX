@@ -122,7 +122,39 @@ export function useXAITweetsWithCache(
         }
       }
 
+      // If no valid entries, try expired entries (stale data)
+      const { data: expiredBatch, error: expiredBatchError } = await supabase
+        .from('trending_topics_v2')
+        .select('generated_at')
+        .order('generated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!expiredBatchError && expiredBatch) {
+        // Get all tweets from this batch (even if expired)
+        const { data: tweets, error } = await supabase
+          .from('trending_topics_v2')
+          .select('tweet_data')
+          .eq('generated_at', expiredBatch.generated_at)
+          .order('id', { ascending: true });
+
+        if (!error && tweets && tweets.length > 0) {
+          const allTweets = tweets.map(row => row.tweet_data as Tweet);
+          console.log(`⚠️ Found ${allTweets.length} expired trends (using stale data)`);
+          
+          // Filter by interests if provided
+          if (interestsRef.current && interestsRef.current.length > 0) {
+            const filtered = filterTweetsByInterests(allTweets, interestsRef.current);
+            console.log(`✅ Filtered to ${filtered.length} matching interests: ${interestsRef.current.join(", ")}`);
+            return filtered;
+          }
+          
+          return allTweets;
+        }
+      }
+
       // Fallback to old table structure (backward compatibility)
+      // Try non-expired first
       const { data, error } = await supabase
         .from('trending_topics')
         .select('*')
@@ -131,9 +163,38 @@ export function useXAITweetsWithCache(
         .limit(1)
         .maybeSingle();
 
-      if (error || !data) {
-        return null;
+      if (!error && data) {
+        const tweets = data.tweets as Tweet[];
+        
+        // Filter by interests if provided
+        if (interestsRef.current && interestsRef.current.length > 0) {
+          return filterTweetsByInterests(tweets, interestsRef.current);
+        }
+        
+        return tweets;
       }
+
+      // Try expired entries from old table
+      const { data: expiredData, error: expiredError } = await supabase
+        .from('trending_topics')
+        .select('*')
+        .order('generated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!expiredError && expiredData) {
+        const tweets = expiredData.tweets as Tweet[];
+        console.log(`⚠️ Found ${tweets.length} expired trends from legacy table (using stale data)`);
+        
+        // Filter by interests if provided
+        if (interestsRef.current && interestsRef.current.length > 0) {
+          return filterTweetsByInterests(tweets, interestsRef.current);
+        }
+        
+        return tweets;
+      }
+
+      return null;
 
       const tweets = data.tweets as Tweet[];
       
@@ -182,68 +243,62 @@ export function useXAITweetsWithCache(
     try {
       console.log('🎙️ Fetching trending topics...');
       
-      // Strategy 1: Try API endpoint (production)
-      if (import.meta.env.PROD || import.meta.env.VITE_USE_API === 'true') {
-        try {
-          // Build URL with interests query parameter
-          const interestsParam = interestsRef.current && interestsRef.current.length > 0
-            ? `?interests=${interestsRef.current.join(',')}`
-            : '';
-          const response = await fetch(`/api/trending${interestsParam}`);
-          if (response.ok) {
-            const data = await response.json();
-            if (data.tweets && data.tweets.length > 0) {
-              console.log('📦 API tweets retrieved:', data.tweets.length);
+      // Strategy 1: Try API endpoint first (always prefer cache via API)
+      try {
+        // Build URL with interests query parameter
+        const interestsParam = interestsRef.current && interestsRef.current.length > 0
+          ? `?interests=${interestsRef.current.join(',')}`
+          : '';
+        const response = await fetch(`/api/trending${interestsParam}`);
+        if (response.ok) {
+          const data = await response.json();
+          // Accept cached data (even if empty - means cache is being populated)
+          if (data.tweets) {
+            console.log('📦 API response:', data.tweets.length, 'tweets');
+            console.log('🔍 Cached:', data.cached, 'Stale:', data.stale || false);
+            if (data.tweets.length > 0) {
               console.log('🔍 First tweet audioUrl:', data.tweets[0]?.audioUrl || 'MISSING');
-              if (interestsRef.current && interestsRef.current.length > 0) {
-                console.log(`🎯 Filtered by interests: ${interestsRef.current.join(", ")}`);
-              }
-              setTrendingTweets(data.tweets);
-              setIsUsingLiveData(true);
-              setIsUsingCache(data.cached || false);
-              console.log(`✅ Got ${data.tweets.length} topics from API (cached: ${data.cached})`);
-              setIsLoading(false);
-              return;
             }
+            if (interestsRef.current && interestsRef.current.length > 0) {
+              console.log(`🎯 Filtered by interests: ${interestsRef.current.join(", ")}`);
+            }
+            setTrendingTweets(data.tweets);
+            setIsUsingLiveData(false); // Always from cache when using API
+            setIsUsingCache(data.cached || false);
+            if (data.empty) {
+              console.log('⏳ Cache empty, background refresh triggered. Please wait...');
+            } else if (data.stale) {
+              console.log('🔄 Using stale cache, refresh in progress...');
+            } else {
+              console.log(`✅ Got ${data.tweets.length} topics from cache`);
+            }
+            setIsLoading(false);
+            return;
           }
-        } catch (apiError) {
-          console.warn('API unavailable, trying cache...', apiError);
         }
+      } catch (apiError) {
+        console.warn('API unavailable, trying direct cache read...', apiError);
       }
 
-      // Strategy 2: Try reading from Supabase directly (local dev)
+      // Strategy 2: Try reading from Supabase directly (local dev fallback)
       const cachedTweets = await readFromCache();
       if (cachedTweets && cachedTweets.length > 0) {
-        console.log('📦 Cached tweets retrieved:', cachedTweets.length);
+        console.log('📦 Cached tweets retrieved directly:', cachedTweets.length);
         console.log('🔍 First tweet audioUrl:', cachedTweets[0]?.audioUrl || 'MISSING');
         setTrendingTweets(cachedTweets);
-        setIsUsingLiveData(true);
+        setIsUsingLiveData(false);
         setIsUsingCache(true);
         console.log(`✅ Got ${cachedTweets.length} topics from cache (direct read)`);
         setIsLoading(false);
         return;
       }
 
-      // Strategy 3: Fallback to direct XAI call
-      if (!xaiService) {
-        setError('XAI service not configured');
-        setIsLoading(false);
-        return;
-      }
-      
-      console.log('📡 Fetching directly from XAI (no cache available)...');
-      if (interestsRef.current && interestsRef.current.length > 0) {
-        console.log(`🎯 Using interests: ${interestsRef.current.join(", ")}`);
-      }
-      const tweets = await xaiService.fetchTrending(filtersRef.current, undefined, interestsRef.current);
-      if (tweets.length > 0) {
-        setTrendingTweets(tweets);
-        setIsUsingLiveData(true);
-        setIsUsingCache(false);
-        console.log(`✅ Got ${tweets.length} topics (direct)`);
-      } else {
-        setError('No trending topics found');
-      }
+      // Strategy 3: No cache available - show message instead of fetching live
+      console.warn('⚠️ No cached data available. Cache should be populated by background jobs.');
+      setTrendingTweets([]);
+      setIsUsingLiveData(false);
+      setIsUsingCache(false);
+      setError('No cached data available. Please wait for background refresh or run populate-db script.');
     } catch (err) {
       console.error('❌ Error fetching trending:', err);
       setError('Failed to fetch trending content');

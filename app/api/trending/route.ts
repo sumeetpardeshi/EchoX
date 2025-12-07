@@ -20,7 +20,7 @@ export async function GET(request: Request) {
     // Check cache first
     const cached = await cacheService.getTrending();
     
-    if (cached && !isExpired(cached.generatedAt)) {
+    if (cached && cached.tweets.length > 0) {
       // Filter cached results by interests if provided
       let filteredTweets = cached.tweets;
       if (interests && interests.length > 0) {
@@ -28,30 +28,19 @@ export async function GET(request: Request) {
         console.log(`📊 Filtered ${cached.tweets.length} cached tweets to ${filteredTweets.length} matching interests`);
       }
       
-      return new Response(JSON.stringify({
-        tweets: filteredTweets,
-        cached: true,
-        generatedAt: cached.generatedAt.toISOString()
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    // Cache expired or missing
-    if (cached) {
-      // Filter stale data by interests if provided
-      let filteredTweets = cached.tweets;
-      if (interests && interests.length > 0) {
-        filteredTweets = filterTweetsByInterests(cached.tweets, interests);
+      // Check if expired
+      const isExpired = cached.expired || isExpiredCheck(cached.generatedAt);
+      
+      if (isExpired) {
+        // Return stale data immediately, refresh in background
+        console.log('⚠️ Returning stale cache data, triggering background refresh...');
+        refreshTrendingInBackground(interests);
       }
       
-      // Return stale data immediately, refresh in background
-      refreshTrendingInBackground(interests);
       return new Response(JSON.stringify({
         tweets: filteredTweets,
         cached: true,
-        stale: true,
+        stale: isExpired,
         generatedAt: cached.generatedAt.toISOString()
       }), {
         status: 200,
@@ -59,22 +48,16 @@ export async function GET(request: Request) {
       });
     }
     
-    // No cache - generate now (first request) with interests
-    const xaiService = getXAIService();
-    if (!xaiService) {
-      return new Response(JSON.stringify({ error: 'XAI service not configured' }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    const tweets = await xaiService.fetchTrending(undefined, undefined, interests);
-    await cacheService.saveTrending(tweets);
+    // No cache - return empty and trigger background refresh
+    // Don't generate live here - let background jobs handle it
+    refreshTrendingInBackground(interests);
     
     return new Response(JSON.stringify({
-      tweets,
+      tweets: [],
       cached: false,
-      generatedAt: new Date().toISOString()
+      empty: true,
+      message: 'No cached data available. Refresh in progress...',
+      generatedAt: null
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
@@ -113,7 +96,7 @@ function filterTweetsByInterests(tweets: any[], interests: string[]): any[] {
   });
 }
 
-function isExpired(generatedAt: Date): boolean {
+function isExpiredCheck(generatedAt: Date): boolean {
   const age = Date.now() - generatedAt.getTime();
   return age > 30 * 60 * 1000; // 30 minutes
 }

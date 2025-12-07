@@ -8,10 +8,11 @@ export class CacheService {
   async getTrending(): Promise<{ 
     tweets: Tweet[]; 
     cached: boolean; 
-    generatedAt: Date 
+    generatedAt: Date;
+    expired?: boolean;
   } | null> {
     try {
-      // Get the latest generation batch (all tweets with same generated_at)
+      // First try to get non-expired entries
       const { data: latestBatch, error: batchError } = await supabase
         .from(TABLE_NAME)
         .select('generated_at')
@@ -20,27 +21,60 @@ export class CacheService {
         .limit(1)
         .maybeSingle();
 
-      if (batchError || !latestBatch) {
+      if (!batchError && latestBatch) {
+        // Get all tweets from this batch (non-expired)
+        const { data: tweets, error } = await supabase
+          .from(TABLE_NAME)
+          .select('tweet_data, generated_at')
+          .eq('generated_at', latestBatch.generated_at)
+          .gt('expires_at', new Date().toISOString())
+          .order('id', { ascending: true });
+
+        if (!error && tweets && tweets.length > 0) {
+          return {
+            tweets: tweets.map(row => row.tweet_data as Tweet),
+            cached: true,
+            generatedAt: new Date(latestBatch.generated_at),
+            expired: false
+          };
+        }
+      }
+
+      // If no valid entries, try to get expired entries (stale data)
+      const { data: expiredBatch, error: expiredBatchError } = await supabase
+        .from(TABLE_NAME)
+        .select('generated_at')
+        .order('generated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (expiredBatchError || !expiredBatch) {
         // Fallback to old table structure for backward compatibility
         return this.getTrendingLegacy();
       }
 
-      // Get all tweets from this batch
+      // Get all tweets from this batch (even if expired)
       const { data: tweets, error } = await supabase
         .from(TABLE_NAME)
-        .select('tweet_data, generated_at')
-        .eq('generated_at', latestBatch.generated_at)
-        .gt('expires_at', new Date().toISOString())
+        .select('tweet_data, generated_at, expires_at')
+        .eq('generated_at', expiredBatch.generated_at)
         .order('id', { ascending: true });
 
       if (error || !tweets || tweets.length === 0) {
-        return null;
+        // Fallback to legacy
+        return this.getTrendingLegacy();
       }
+
+      // Check if expired
+      const isExpired = tweets[0]?.expires_at 
+        ? new Date(tweets[0].expires_at) < new Date()
+        : true;
 
       return {
         tweets: tweets.map(row => row.tweet_data as Tweet),
         cached: true,
-        generatedAt: new Date(latestBatch.generated_at)
+        generatedAt: new Date(expiredBatch.generated_at),
+        expired: isExpired
       };
     } catch (error) {
       console.error('Error fetching trending cache:', error);
@@ -53,9 +87,11 @@ export class CacheService {
   private async getTrendingLegacy(): Promise<{ 
     tweets: Tweet[]; 
     cached: boolean; 
-    generatedAt: Date 
+    generatedAt: Date;
+    expired?: boolean;
   } | null> {
     try {
+      // Try non-expired first
       const { data, error } = await supabase
         .from('trending_topics')
         .select('*')
@@ -64,14 +100,34 @@ export class CacheService {
         .limit(1)
         .maybeSingle();
 
-      if (error || !data) {
+      if (!error && data) {
+        return {
+          tweets: data.tweets as Tweet[],
+          cached: true,
+          generatedAt: new Date(data.generated_at),
+          expired: false
+        };
+      }
+
+      // Try expired entries
+      const { data: expiredData, error: expiredError } = await supabase
+        .from('trending_topics')
+        .select('*')
+        .order('generated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (expiredError || !expiredData) {
         return null;
       }
 
+      const isExpired = new Date(expiredData.expires_at) < new Date();
+
       return {
-        tweets: data.tweets as Tweet[],
+        tweets: expiredData.tweets as Tweet[],
         cached: true,
-        generatedAt: new Date(data.generated_at)
+        generatedAt: new Date(expiredData.generated_at),
+        expired: isExpired
       };
     } catch (error) {
       return null;
