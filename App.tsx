@@ -88,7 +88,7 @@ const AppContent: React.FC = () => {
         {/* Echo Ripple Background */}
         <div className="absolute inset-0 bg-black">
           <div 
-            className="absolute inset-0 opacity-[0.1]"
+            className="absolute inset-0 opacity-[0.12]"
             style={{
               backgroundImage: `repeating-radial-gradient(
                 circle at center,

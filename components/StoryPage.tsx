@@ -3,9 +3,22 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Tweet } from '../types';
 import { GeminiService } from '../services/geminiService';
 import { audioController } from '../services/audioService';
-import { Play, Pause, ArrowLeft } from 'lucide-react';
+import { Play, Pause, ArrowLeft, MessageCircle, ExternalLink } from 'lucide-react';
 import { cacheService } from '../services/cacheService';
 import { getXAIService } from '../services/xaiService';
+
+// Helper to create X/Twitter profile URL from handle
+function getTwitterProfileUrl(handle: string): string {
+  const cleanHandle = handle.replace('@', '');
+  return `https://x.com/${cleanHandle}`;
+}
+
+// Helper to create X/Twitter search URL for the tweet content
+function getTwitterSearchUrl(content: string): string {
+  // Encode the content for URL and limit length
+  const searchQuery = encodeURIComponent(content.slice(0, 100));
+  return `https://x.com/search?q=${searchQuery}&f=live`;
+}
 
 const StoryPage: React.FC = () => {
   const { storyId } = useParams<{ storyId: string }>();
@@ -277,6 +290,50 @@ const StoryPage: React.FC = () => {
             </div>
           )}
 
+          {/* Audio Player */}
+          <div className="mb-6">
+            {tweet.audioUrl || hasAudio ? (
+              <div className="bg-white/5 rounded-2xl p-4">
+                <div className="flex items-center gap-4 mb-4">
+                  <button
+                    onClick={togglePlay}
+                    className="w-12 h-12 bg-white rounded-full flex items-center justify-center text-black hover:scale-105 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={!currentAudioBuffer.current}
+                    title={currentAudioBuffer.current ? (isPlaying ? 'Pause' : 'Play') : 'Loading audio...'}
+                  >
+                    {isPlaying ? (
+                      <Pause size={24} fill="currentColor" />
+                    ) : (
+                      <Play size={24} fill="currentColor" className="ml-1" />
+                    )}
+                  </button>
+                  <div className="flex-1">
+                    <div className="text-sm text-gray-400 mb-1">
+                      {currentAudioBuffer.current ? (
+                        `${Math.floor(currentTime)}s / ${Math.floor(duration)}s`
+                      ) : (
+                        'Loading audio...'
+                      )}
+                    </div>
+                    <div className="w-full bg-white/10 rounded-full h-1.5">
+                      <div
+                        className="bg-white h-1.5 rounded-full transition-all"
+                        style={{ width: `${progress}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+                {!currentAudioBuffer.current && tweet.audioUrl && (
+                  <p className="text-xs text-gray-500 mt-2">Audio is loading...</p>
+                )}
+              </div>
+            ) : (
+              <div className="bg-white/5 rounded-2xl p-4 text-center">
+                <p className="text-gray-400 text-sm">Audio not available for this story</p>
+              </div>
+            )}
+          </div>
+
           {/* Title */}
           {tweet.trendTitle && (
             <h1 className="text-3xl font-bold mb-4">{tweet.trendTitle}</h1>
@@ -290,57 +347,58 @@ const StoryPage: React.FC = () => {
           </div>
 
           {/* Metadata */}
-          <div className="text-sm text-gray-500 space-y-2 mb-6">
+          <div className="text-sm text-gray-500 space-y-2 mb-8">
             {tweet.topic && (
               <div>
                 <span className="text-gray-400">Topic: </span>
                 {tweet.topic}
               </div>
             )}
-            
           </div>
-        </div>
-            
-        {/* Fixed Audio Player at bottom */}
-        <div className="shrink-0 px-4 pb-4 pt-2 border-t border-white/10 bg-black/80 backdrop-blur-sm">
-          {tweet.audioUrl || hasAudio ? (
-            <div className="bg-white/5 rounded-2xl p-6">
-              <div className="flex items-center gap-4 mb-4">
-                <button
-                  onClick={togglePlay}
-                  className="w-14 h-14 bg-white rounded-full flex items-center justify-center text-black hover:scale-105 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
-                  disabled={!currentAudioBuffer.current}
-                  title={currentAudioBuffer.current ? (isPlaying ? 'Pause' : 'Play') : 'Loading audio...'}
-                >
-                  {isPlaying ? (
-                    <Pause size={26} fill="currentColor" />
-                  ) : (
-                    <Play size={26} fill="currentColor" className="ml-1" />
-                  )}
-                </button>
-                <div className="flex-1">
-                  <div className="text-sm text-gray-400 mb-1">
-                    {currentAudioBuffer.current ? (
-                      `${Math.floor(currentTime)}s / ${Math.floor(duration)}s`
-                    ) : (
-                      'Loading audio...'
-                    )}
-                  </div>
-                  <div className="w-full bg-white/10 rounded-full h-2">
-                    <div
-                      className="bg-white h-2 rounded-full transition-all"
-                      style={{ width: `${progress}%` }}
-                    />
-                  </div>
-                </div>
+
+          {/* Top Tweets / Sources */}
+          {tweet.topTweets && tweet.topTweets.length > 0 && (
+            <div className="mb-8 pt-6 border-t border-white/10">
+              <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                <MessageCircle size={20} className="text-emerald-400" />
+                <span>Sources & Top Tweets</span>
+                <span className="text-xs font-normal text-gray-500 bg-white/5 px-2 py-0.5 rounded-full">
+                  {tweet.topTweets.length}
+                </span>
+              </h3>
+              <div className="space-y-3">
+                {tweet.topTweets.map((t, idx) => (
+                  <a 
+                    key={idx} 
+                    href={getTwitterSearchUrl(t.content)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block bg-white/5 rounded-xl p-4 border border-white/10 hover:bg-white/10 hover:border-emerald-500/30 transition-all cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-sm font-bold text-white">{t.author}</span>
+                      <a 
+                        href={getTwitterProfileUrl(t.handle)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-xs text-gray-500 hover:text-emerald-400 transition-colors"
+                      >
+                        {t.handle}
+                      </a>
+                      {t.engagement && (
+                        <span className="text-[10px] text-emerald-400 ml-auto bg-emerald-500/10 px-2 py-0.5 rounded-full">
+                          {t.engagement}
+                        </span>
+                      )}
+                      <ExternalLink size={12} className="text-gray-600 group-hover:text-emerald-400 transition-colors" />
+                    </div>
+                    <p className="text-sm text-gray-300 group-hover:text-white transition-colors leading-relaxed">
+                      {t.content}
+                    </p>
+                  </a>
+                ))}
               </div>
-              {!currentAudioBuffer.current && tweet.audioUrl && (
-                <p className="text-xs text-gray-500 mt-2">Audio is loading...</p>
-              )}
-            </div>
-          ) : (
-            <div className="bg-white/5 rounded-2xl p-6 text-center">
-              <p className="text-gray-400 text-sm">Audio not available for this story</p>
             </div>
           )}
         </div>
