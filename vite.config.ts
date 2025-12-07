@@ -15,6 +15,9 @@ export default defineConfig(({ mode }) => {
             rewrite: (path) => path.replace(/^\/api\/xai/, ''),
             secure: true,
           },
+          // Note: /api/trending, /api/refresh, /api/cron are Vercel serverless functions
+          // For local dev, use 'vercel dev' or they'll work in production on Vercel
+          // The frontend will fall back to direct XAI calls if API is unavailable
         },
       },
       plugins: [react()],

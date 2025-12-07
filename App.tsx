@@ -7,6 +7,7 @@ import { Tab } from './types';
 import { GeminiService } from './services/geminiService';
 import { audioController } from './services/audioService';
 import { useXAITweets } from './hooks/useXAITweets';
+import { useXAITweetsWithCache } from './hooks/useXAITweetsWithCache';
 import { useUserFilters } from './hooks/useUserFilters';
 import { Menu, X, Settings, Info, Volume2, Zap, RefreshCw, Play, Filter } from 'lucide-react';
 
@@ -59,15 +60,16 @@ const App: React.FC = () => {
     return new GeminiService(GEMINI_API_KEY);
   }, []);
 
-  // Use xAI for live tweets with user filters
+  // Use xAI for live tweets with user filters (with cache support)
   const { 
     trendingTweets, 
     myFeedTweets, 
     isLoading: isLoadingTweets, 
     refetchTrending,
     refetchMyFeed,
-    isUsingLiveData 
-  } = useXAITweets({
+    isUsingLiveData,
+    isUsingCache
+  } = useXAITweetsWithCache({
     xaiApiKey: XAI_API_KEY || null,
     filters,
     interests,

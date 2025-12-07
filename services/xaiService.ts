@@ -2,13 +2,21 @@ import { Tweet, TopTweet } from "../types";
 import { audioController } from "./audioService";
 
 // Use proxy in development to avoid CORS, direct URL otherwise
-const XAI_API_URL = import.meta.env.DEV
+// Check if we're in browser (has window) or Node.js
+const isBrowser = typeof window !== 'undefined';
+const isDev = isBrowser && (import.meta.env?.DEV || false);
+
+const XAI_API_URL = isDev
   ? "/api/xai/v1/chat/completions"
   : "https://api.x.ai/v1/chat/completions";
 
-const XAI_TTS_URL = import.meta.env.DEV
+const XAI_TTS_URL = isDev
   ? "/api/xai/v1/audio/speech"
   : "https://api.x.ai/v1/audio/speech";
+
+const XAI_IMAGE_URL = isDev
+  ? "/api/xai/v1/images/generations"
+  : "https://api.x.ai/v1/images/generations";
 
 // Available Grok voices
 export type GrokVoice = "Ara" | "Rex" | "Sal" | "Eve" | "Una" | "Leo";
@@ -157,14 +165,35 @@ function buildPodcastPrompt(options: PodcastPromptOptions = {}): string {
 
 Search X/Twitter for the TOP ${count} ${searchScope} happening RIGHT NOW.
 
-For EACH story/topic, write a broadcast-ready script (2-3 sentences, ${minWords}-${maxWords} words) that:
-- Opens with context or a hook that frames the story
-- States the key facts clearly and precisely
-- Closes with why it matters or what comes next
-- Uses ${toneDescription} language throughout
-- Avoids ${avoidDescription}
+For EACH story/topic, you MUST create:
+
+1. A broadcast-ready script (2-3 sentences, ${minWords}-${maxWords} words) that:
+   - Opens with context or a hook that frames the story
+   - States the key facts clearly and precisely
+   - Closes with why it matters or what comes next
+   - Uses ${toneDescription} language throughout
+   - Avoids ${avoidDescription}
+
+2. An imagePrompt that VISUALLY REPRESENTS the story described in the podcastScript:
+   - Read the podcastScript you wrote
+   - Identify the MAIN SUBJECT, SETTING, or ACTION in that script
+   - Create an imagePrompt that shows a concrete visual scene from that story
+   - The imagePrompt MUST directly relate to what the podcastScript describes
+   - Example: If podcastScript mentions "researchers analyzing data", imagePrompt should show "researchers examining data on a laptop in a modern laboratory"
+   - Example: If podcastScript mentions "Capitol building discussions", imagePrompt should show "outside the Capitol building with people in business attire"
+   
+   Structure for imagePrompt:
+   - SUBJECT: Extract the main visual element from your podcastScript (specific person, place, or object)
+   - SETTING: Use the location or context mentioned in the podcastScript
+   - STYLE: Always use "editorial news photo style, realistic lighting, natural colors"
+   - COMPOSITION: "landscape orientation, minimal background clutter"
+   - CONSTRAINTS: Always end with "no text in image, non-sensational, no identifiable real individuals"
+
+CRITICAL: The imagePrompt must be a visual representation of the story in podcastScript. If the script talks about technology, show technology. If it talks about politics, show political settings. Make them match!
 
 Also include 2-3 representative tweets from notable accounts.
+
+Example: "Two researchers examining data on a laptop in a modern laboratory, editorial news photo style with realistic lighting and natural colors, landscape orientation, no text in image, non-sensational"
 
 Return results in this EXACT JSON format:
 {
@@ -176,6 +205,7 @@ Return results in this EXACT JSON format:
         persona.toneTraits[0].charAt(0).toUpperCase() +
         persona.toneTraits[0].slice(1)
       } tone, precise language, suitable for audio.",
+      "imagePrompt": "[Subject] in [setting], editorial news photo style with realistic lighting and natural colors, landscape orientation, no text in image, non-sensational, no identifiable real individuals",
       "topTweets": [
         {
           "author": "Display Name",
@@ -193,6 +223,10 @@ Requirements:
 - Include a diverse mix of stories if searching broadly
 - Write scripts that sound polished and professional when read aloud
 - Include real tweets from notable/verified accounts
+- CRITICAL: imagePrompt MUST be a visual representation of the story in podcastScript
+- imagePrompt must describe a CONCRETE visual scene that matches what the podcastScript describes
+- If podcastScript mentions specific people/places/actions, imagePrompt should show those visually
+- Do NOT create generic or abstract imagePrompts - they must match the story content
 - Return ONLY valid JSON, no markdown or explanations`;
 }
 
@@ -291,6 +325,139 @@ export class XAIService {
   }
 
   /**
+   * Generate an image prompt from a podcast script
+   * Uses XAI to create a visual description based on the script content
+   */
+  async generateImagePromptFromScript(podcastScript: string): Promise<string | null> {
+    if (!this.apiKey) {
+      console.error("XAI API key not available for image prompt generation");
+      return null;
+    }
+
+    console.log(`🎨 Generating image prompt from podcast script...`);
+    console.log(`  Script: ${podcastScript.substring(0, 100)}...`);
+
+    try {
+      const apiUrl = typeof process !== 'undefined' && process.env.XAI_API_URL
+        ? process.env.XAI_API_URL
+        : XAI_API_URL;
+
+      const response = await fetch(apiUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "grok-2",
+          messages: [
+            {
+              role: "system",
+              content: `You are an expert at creating visual image prompts. Your task is to read a podcast script and create a detailed image prompt that visually represents the story described in the script.`
+            },
+            {
+              role: "user",
+              content: `Read this podcast script and create an image prompt that visually represents the story:
+
+"${podcastScript}"
+
+Create an image prompt that:
+- Shows a CONCRETE visual scene from the story (not abstract)
+- Uses the main subject, setting, or action mentioned in the script
+- Follows this format: "[Subject] in [setting], editorial news photo style with realistic lighting and natural colors, landscape orientation, no text in image, non-sensational, no identifiable real individuals"
+
+Example: If the script mentions "holiday gift trends with tech gadgets and cozy home essentials", the prompt should be: "A modern living room with tech gadgets and cozy home essentials arranged on a coffee table, editorial news photo style with realistic lighting and natural colors, landscape orientation, no text in image, non-sensational, no identifiable real individuals"
+
+Return ONLY the image prompt text, nothing else.`
+            }
+          ],
+          temperature: 0.7,
+          max_tokens: 200
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`Image prompt API Error: ${response.status} - ${errorText}`);
+        return null;
+      }
+
+      const data = await response.json();
+      const promptText = data.choices?.[0]?.message?.content?.trim();
+
+      if (promptText) {
+        // Clean up the response (remove quotes, markdown, etc.)
+        let cleanPrompt = promptText.replace(/^["']|["']$/g, '').replace(/```/g, '').trim();
+        console.log(`✅ Generated image prompt: ${cleanPrompt.substring(0, 80)}...`);
+        return cleanPrompt;
+      }
+
+      console.error("No prompt text in response:", data);
+      return null;
+    } catch (error) {
+      console.error("Image prompt generation error:", error);
+      return null;
+    }
+  }
+
+  /**
+   * Generate an image using Grok's image generation API
+   * Returns the URL of the generated image
+   */
+  async generateImage(prompt: string): Promise<string | null> {
+    if (!this.apiKey) {
+      console.error("XAI API key not available for image generation");
+      return null;
+    }
+
+    console.log(`🎨 Generating image with Grok...`);
+    console.log(
+      `  Prompt: ${prompt.substring(0, 100)}${prompt.length > 100 ? "..." : ""}`
+    );
+
+    try {
+      // Use process.env for Node.js, import.meta.env for browser
+      const imageUrl = typeof process !== 'undefined' && process.env.XAI_IMAGE_URL
+        ? process.env.XAI_IMAGE_URL
+        : XAI_IMAGE_URL;
+
+      const response = await fetch(imageUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "grok-2-image",
+          prompt: prompt,
+          n: 1,
+          response_format: "url",
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`Image API Error: ${response.status} - ${errorText}`);
+        return null;
+      }
+
+      const data = await response.json();
+      const imageUrlResult = data.data?.[0]?.url;
+
+      if (imageUrlResult) {
+        console.log(`✅ Image generated successfully`);
+        return imageUrlResult;
+      }
+
+      console.error("No image URL in response:", data);
+      return null;
+    } catch (error) {
+      console.error("Image generation error:", error);
+      return null;
+    }
+  }
+
+  /**
    * Generate speech from text using Grok TTS
    * Returns an AudioBuffer ready for playback
    */
@@ -334,19 +501,40 @@ export class XAIService {
       const arrayBuffer = await response.arrayBuffer();
       console.log(`✅ Received audio data: ${arrayBuffer.byteLength} bytes`);
 
-      // Decode the audio using Web Audio API
-      const audioContext = audioController.getContext();
+      // Only decode audio in browser environment
+      if (typeof window === 'undefined') {
+        console.warn('⚠️  Cannot decode audio in Node.js environment. Use textToSpeechRaw() instead.');
+        return null;
+      }
 
-      // For WAV/PCM formats, we may need manual decoding
-      // For MP3/other compressed formats, use native decodeAudioData
-      if (responseFormat === "pcm") {
-        // PCM is raw 16-bit signed little-endian at 24kHz mono
-        return this.decodePCM(arrayBuffer, audioContext);
-      } else {
-        // Let browser decode MP3/WAV/etc
-        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-        console.log(`✅ Audio decoded: ${audioBuffer.duration.toFixed(2)}s`);
-        return audioBuffer;
+      if (!audioController) {
+        console.error('❌ AudioController not available');
+        return null;
+      }
+
+      try {
+        // Decode the audio using Web Audio API
+        const audioContext = audioController.getContext();
+        
+        if (!audioContext) {
+          console.error('❌ AudioContext not available');
+          return null;
+        }
+
+        // For WAV/PCM formats, we may need manual decoding
+        // For MP3/other compressed formats, use native decodeAudioData
+        if (responseFormat === "pcm") {
+          // PCM is raw 16-bit signed little-endian at 24kHz mono
+          return this.decodePCM(arrayBuffer, audioContext);
+        } else {
+          // Let browser decode MP3/WAV/etc
+          const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+          console.log(`✅ Audio decoded: ${audioBuffer.duration.toFixed(2)}s`);
+          return audioBuffer;
+        }
+      } catch (decodeError) {
+        console.error('❌ Error decoding audio:', decodeError);
+        return null;
       }
     } catch (error) {
       console.error("TTS Error:", error);
@@ -373,6 +561,56 @@ export class XAIService {
 
     console.log(`✅ PCM decoded: ${audioBuffer.duration.toFixed(2)}s`);
     return audioBuffer;
+  }
+
+  /**
+   * Generate speech and return as ArrayBuffer (for server-side use)
+   * Returns raw audio data that can be uploaded to storage
+   */
+  async textToSpeechRaw({
+    text,
+    voice = "Ara",
+    responseFormat = "mp3",
+  }: TTSOptions): Promise<ArrayBuffer | null> {
+    if (!this.apiKey) {
+      console.error("XAI API key not available for TTS");
+      return null;
+    }
+
+    console.log(`🎤 Generating Grok TTS (raw)...`);
+    console.log(`  Voice: ${voice}`);
+    console.log(
+      `  Text: ${text.substring(0, 50)}${text.length > 50 ? "..." : ""}`
+    );
+
+    try {
+      const response = await fetch(XAI_TTS_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          input: text,
+          voice: voice,
+          response_format: responseFormat,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`TTS API Error: ${response.status} - ${errorText}`);
+        return null;
+      }
+
+      // Return raw ArrayBuffer for server-side use
+      const arrayBuffer = await response.arrayBuffer();
+      console.log(`✅ Received raw audio data: ${arrayBuffer.byteLength} bytes`);
+      return arrayBuffer;
+    } catch (error) {
+      console.error("TTS Error:", error);
+      return null;
+    }
   }
 
   private async searchX(
@@ -546,15 +784,54 @@ export class XAIService {
     return `https://picsum.photos/seed/${seed}/600/400`;
   }
 
+  /**
+   * Generate a gradient placeholder based on topic
+   * Returns a data URL for an SVG gradient
+   */
+  static getGradientPlaceholder(topic: string): string {
+    const gradients: Record<string, [string, string]> = {
+      Tech: ["#667eea", "#764ba2"],
+      AI: ["#f093fb", "#f5576c"],
+      Space: ["#4facfe", "#00f2fe"],
+      Crypto: ["#fa709a", "#fee140"],
+      Sports: ["#a8edea", "#fed6e3"],
+      Politics: ["#d299c2", "#fef9d7"],
+      Entertainment: ["#fddb92", "#d1fdff"],
+      Science: ["#96fbc4", "#f9f586"],
+      Gaming: ["#cd9cf2", "#f6f3ff"],
+      Music: ["#e0c3fc", "#8ec5fc"],
+      Business: ["#c1dfc4", "#deecdd"],
+      Health: ["#84fab0", "#8fd3f4"],
+      Breaking: ["#ff0844", "#ffb199"],
+      Trending: ["#667eea", "#764ba2"],
+    };
+
+    const [color1, color2] = gradients[topic] || gradients["Trending"];
+
+    return `data:image/svg+xml,${encodeURIComponent(`
+      <svg xmlns="http://www.w3.org/2000/svg" width="600" height="400">
+        <defs>
+          <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:${color1};stop-opacity:1" />
+            <stop offset="100%" style="stop-color:${color2};stop-opacity:1" />
+          </linearGradient>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#grad)"/>
+      </svg>
+    `)}`;
+  }
+
   // Fetch trending topics from X with podcast-style narration
   async fetchTrending(
     userFilters?: Partial<SearchFilters>,
-    persona?: BroadcastPersona
+    persona?: BroadcastPersona,
+    interests?: string[]
   ): Promise<Tweet[]> {
     console.log("🎙️ Fetching trending topics from X for podcast...");
     console.log("📋 User filters:", userFilters);
+    console.log("📋 User interests:", interests);
 
-    const prompt = buildPodcastPrompt({ persona });
+    const prompt = buildPodcastPrompt({ persona, interests });
 
     // Merge user filters with defaults for trending
     const mergedFilters: Partial<SearchFilters> = {
@@ -614,6 +891,7 @@ export class XAIService {
             trendTitle?: string;
             topic?: string;
             podcastScript?: string;
+            imagePrompt?: string;
             topTweets?: Array<{
               author?: string;
               handle?: string;
@@ -623,7 +901,7 @@ export class XAIService {
           },
           index: number
         ): Tweet => {
-          const topTweet = trend.topTweets?.[0];
+          const topicValue = trend.topic || "Trending";
           return {
             id: `trend-${startId + index}-${Date.now()}`,
             user: {
@@ -638,11 +916,14 @@ export class XAIService {
             timestamp: "Trending Now",
             likes: Math.floor(Math.random() * 100000) + 10000,
             retweets: Math.floor(Math.random() * 50000) + 5000,
-            topic: trend.topic || "Trending",
-            imageUrl: this.getTopicImage(trend.topic || "Trending"),
+            topic: topicValue,
+            // Use gradient placeholder initially, AI image will be loaded async or from cache
+            imageUrl: XAIService.getGradientPlaceholder(topicValue),
+            isImageLoading: !!trend.imagePrompt,
             // Podcast-specific fields
             trendTitle: trend.trendTitle,
             podcastScript: trend.podcastScript,
+            imagePrompt: trend.imagePrompt,
             topTweets: trend.topTweets?.map((t) => ({
               author: t.author || "Unknown",
               handle: t.handle || "@unknown",
@@ -721,5 +1002,9 @@ export function initXAIService(apiKey: string): XAIService {
 }
 
 export function getXAIService(): XAIService | null {
+  // If no instance exists, try to create one from environment variable (for server-side)
+  if (!xaiServiceInstance && typeof process !== 'undefined' && process.env.XAI_API_KEY) {
+    xaiServiceInstance = new XAIService(process.env.XAI_API_KEY);
+  }
   return xaiServiceInstance;
 }

@@ -128,6 +128,13 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
 
       const displayTitle = currentTweet.trendTitle || currentTweet.content?.substring(0, 40) || 'Unknown';
       console.log('🎵 Loading track:', currentTweetId, displayTitle);
+      console.log('🔍 Tweet data:', {
+        id: currentTweet.id,
+        hasAudioUrl: !!currentTweet.audioUrl,
+        audioUrl: currentTweet.audioUrl,
+        hasSummary: !!currentTweet.summary,
+        hasPodcastScript: !!currentTweet.podcastScript
+      });
       
       setIsLoading(true);
       setSummary(null);
@@ -142,7 +149,55 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
       setIsPlaying(false);
 
       try {
+        // Check if tweet has pre-generated audio URL
+        if (currentTweet.audioUrl) {
+          console.log('🎵 Loading pre-generated audio:', currentTweet.audioUrl);
+          
+          try {
+            const response = await fetch(currentTweet.audioUrl);
+            if (!response.ok) {
+              throw new Error('Failed to fetch audio');
+            }
+            
+            const arrayBuffer = await response.arrayBuffer();
+            const audioBuffer = await audioController.getContext().decodeAudioData(arrayBuffer);
+            
+            // Use pre-generated summary if available
+            const summary = currentTweet.summary || currentTweet.content || null;
+            
+            // Check if this request is still current
+            if (currentRequestId.current !== requestId) {
+              console.log('⏭️ Request superseded, skipping playback:', currentTweetId);
+              return;
+            }
+            
+            setSummary(summary);
+            setDuration(audioBuffer.duration);
+            setIsLoading(false);
+            lastLoadedTweetId.current = currentTweetId;
+            currentAudioBuffer.current = audioBuffer;
+            
+            // Play immediately - no generation delay!
+            if (currentRequestId.current === requestId) {
+              if (userSkippedWhilePaused.current) {
+                userSkippedWhilePaused.current = false;
+              } else {
+                await playAudio(audioBuffer);
+              }
+            }
+            return;
+          } catch (audioError) {
+            console.error('Error loading pre-generated audio:', audioError);
+            // Fall through to client-side generation
+          }
+        }
+        
+        // Fallback: Generate audio client-side (for personalized feeds, etc.)
         // Pass podcastScript if available (skips summarization for pre-written content)
+        console.log('🎙️ Generating audio client-side...');
+        console.log('   Has podcastScript:', !!currentTweet.podcastScript);
+        console.log('   Content length:', currentTweet.content?.length || 0);
+        
         const data = await geminiService.processTweet(
           currentTweetId, 
           currentTweet.content || '',
@@ -171,11 +226,13 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
               console.log('⏸️ User skipped while paused - not auto-playing');
               userSkippedWhilePaused.current = false; // Reset the flag
             } else {
+              console.log('▶️ Starting audio playback...');
               await playAudio(data.audioBuffer);
             }
           }
         } else {
-          console.error('❌ No data returned');
+          console.error('❌ No data returned from processTweet');
+          console.error('   This usually means audio generation failed');
           setError('Failed to generate audio');
           setSummary(currentTweet.content || null);
           setIsLoading(false);

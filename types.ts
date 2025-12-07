@@ -24,7 +24,13 @@ export interface Tweet {
   // Podcast-style fields
   podcastScript?: string;      // The podcast narration for this trend
   trendTitle?: string;         // Short title of the trend
-  topTweets?: TopTweet[];      // Sample tweets driving this trend
+  topTweets?: TopTweet[];       // Sample tweets driving this trend
+  imagePrompt?: string;         // Prompt for AI image generation
+  isImageLoading?: boolean;     // Whether AI image is being generated
+  // Pre-generated audio fields
+  audioUrl?: string;           // Pre-generated audio URL from storage
+  summary?: string;            // Pre-generated summary text
+  voice?: string;             // Voice used for audio generation
 }
 
 export interface AudioState {

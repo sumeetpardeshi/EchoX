@@ -60,19 +60,47 @@ export function useXAITweets(
 
   // Fetch trending topics
   const refetchTrending = useCallback(async () => {
-    if (!xaiService) return;
-
     setIsLoading(true);
     setError(null);
 
     try {
-      console.log('🎙️ Fetching live trending topics...');
+      console.log('🎙️ Fetching trending topics from backend...');
       console.log('📋 Using filters:', filtersRef.current);
+      
+      // Try backend API first (only in production or when using vercel dev)
+      // In local dev without vercel dev, this will fail and fall back to direct calls
+      if (import.meta.env.PROD || import.meta.env.VITE_USE_API === 'true') {
+        try {
+          const response = await fetch('/api/trending');
+          if (response.ok) {
+            const data = await response.json();
+            if (data.tweets && data.tweets.length > 0) {
+              setTrendingTweets(data.tweets);
+              setIsUsingLiveData(true);
+              console.log(`✅ Got ${data.tweets.length} trending topics from cache (cached: ${data.cached})`);
+              setIsLoading(false);
+              return;
+            }
+          }
+        } catch (apiError) {
+          console.warn('Backend API unavailable, falling back to direct call:', apiError);
+        }
+      } else {
+        console.log('📝 Local dev mode: Using direct XAI calls (use "vercel dev" for API routes)');
+      }
+      
+      // Fallback to direct XAI call if backend unavailable
+      if (!xaiService) {
+        setError('XAI service not configured');
+        setIsLoading(false);
+        return;
+      }
+      
       const tweets = await xaiService.fetchTrending(filtersRef.current);
       if (tweets.length > 0) {
         setTrendingTweets(tweets);
         setIsUsingLiveData(true);
-        console.log(`✅ Got ${tweets.length} trending topics`);
+        console.log(`✅ Got ${tweets.length} trending topics (direct)`);
       } else {
         setError('No trending topics found');
       }
