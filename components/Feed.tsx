@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Tweet } from '../types';
 import { GeminiService } from '../services/geminiService';
 import { audioController } from '../services/audioService';
@@ -7,7 +7,7 @@ import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat } from 'lucide-reac
 
 interface FeedProps {
   tweets: Tweet[];
-  geminiService: GeminiService;
+  geminiService: GeminiService | null;
   feedTitle: string;
 }
 
@@ -15,6 +15,7 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   
   // Track Data
   const [summary, setSummary] = useState<string | null>(null);
@@ -26,94 +27,154 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
   
   const progressInterval = useRef<number | null>(null);
   const startTimeRef = useRef<number>(0);
+  
+  // Track the current request to prevent race conditions
+  const currentRequestId = useRef<string | null>(null);
+  const lastLoadedTweetId = useRef<string | null>(null);
 
-  // Load current track data when index changes
+  // Get current tweet safely
+  const currentTweet = tweets[currentIndex];
+  const currentTweetId = currentTweet?.id;
+
+  // Define callbacks first (before useEffect)
+  const stopProgressLoop = useCallback(() => {
+    if (progressInterval.current) {
+      clearInterval(progressInterval.current);
+      progressInterval.current = null;
+    }
+  }, []);
+
+  const startProgressLoop = useCallback((trackDuration: number) => {
+    stopProgressLoop();
+    progressInterval.current = window.setInterval(() => {
+      const ctx = audioController.getContext();
+      const curr = ctx.currentTime - startTimeRef.current;
+      
+      if (curr >= trackDuration && trackDuration > 0) {
+        setProgress(100);
+      } else {
+        setCurrentTime(curr);
+        setProgress((curr / trackDuration) * 100);
+      }
+    }, 100);
+  }, [stopProgressLoop]);
+
+  const handleNext = useCallback(() => {
+    setCurrentIndex((prev) => (prev + 1) % tweets.length);
+    // Reset last loaded so the new track loads
+    lastLoadedTweetId.current = null;
+  }, [tweets.length]);
+
+  const handleTrackEnd = useCallback(() => {
+    console.log('🔊 Track ended, advancing...');
+    stopProgressLoop();
+    setIsPlaying(false);
+    setProgress(100);
+    // Auto-advance to next track
+    handleNext();
+  }, [stopProgressLoop, handleNext]);
+
+  const playAudio = useCallback(async (buffer: AudioBuffer) => {
+    // Set start time to now
+    startTimeRef.current = audioController.getContext().currentTime;
+    
+    console.log('▶️ Starting playback...');
+    await audioController.play(buffer, handleTrackEnd);
+    
+    setIsPlaying(true);
+    startProgressLoop(buffer.duration);
+  }, [handleTrackEnd, startProgressLoop]);
+
+  // Load current track data when the displayed tweet changes
   useEffect(() => {
-    let mounted = true;
+    // Skip if no tweet or same tweet already loaded
+    if (!currentTweetId) return;
+    if (lastLoadedTweetId.current === currentTweetId) {
+      console.log('⏭️ Skipping - already loaded:', currentTweetId);
+      return;
+    }
+
+    // Generate unique request ID
+    const requestId = `${currentTweetId}-${Date.now()}`;
+    currentRequestId.current = requestId;
     
     const loadTrack = async () => {
+      // Check if geminiService is available
+      if (!geminiService) {
+        console.error('Gemini service not available - check GEMINI_API_KEY');
+        setError('Audio unavailable - Gemini API key not configured');
+        setSummary(currentTweet?.content || null);
+        setIsLoading(false);
+        return;
+      }
+
+      const displayTitle = currentTweet.trendTitle || currentTweet.content.substring(0, 40);
+      console.log('🎵 Loading track:', currentTweetId, displayTitle);
+      
       setIsLoading(true);
       setSummary(null);
+      setError(null);
       setProgress(0);
       setCurrentTime(0);
-      setDuration(0); // Reset duration while loading
+      setDuration(0);
       
-      // Stop previous track if playing
+      // Stop any currently playing track
       audioController.stop();
+      stopProgressLoop();
+      setIsPlaying(false);
 
-      const tweet = tweets[currentIndex];
-      
       try {
-        const data = await geminiService.processTweet(tweet.id, tweet.content);
+        // Pass podcastScript if available (skips summarization for pre-written content)
+        const data = await geminiService.processTweet(
+          currentTweetId, 
+          currentTweet.content,
+          currentTweet.podcastScript
+        );
         
-        if (mounted && data) {
+        // Check if this request is still current (not superseded by another)
+        if (currentRequestId.current !== requestId) {
+          console.log('⏭️ Request superseded, skipping playback:', currentTweetId);
+          return;
+        }
+        
+        if (data) {
+          console.log('✅ Track ready:', currentTweetId, 'duration:', data.audioBuffer.duration.toFixed(2) + 's');
+          lastLoadedTweetId.current = currentTweetId;
           setSummary(data.summary);
           setDuration(data.audioBuffer.duration);
+          setIsLoading(false);
           
-          // Auto-play
-          await playAudio(data.audioBuffer);
+          // Auto-play only if still the current request
+          if (currentRequestId.current === requestId) {
+            await playAudio(data.audioBuffer);
+          }
+        } else {
+          console.error('❌ No data returned');
+          setError('Failed to generate audio');
+          setSummary(currentTweet.content);
+          setIsLoading(false);
         }
       } catch (e) {
-        console.error("Error loading track", e);
-        if (mounted) setIsLoading(false);
-      } finally {
-        if (mounted) setIsLoading(false);
+        console.error("❌ Error loading track:", e);
+        if (currentRequestId.current === requestId) {
+          setError('Error generating audio');
+          setSummary(currentTweet.content);
+          setIsLoading(false);
+        }
       }
     };
 
     loadTrack();
 
     return () => { 
-      mounted = false; 
+      // Cleanup: invalidate this request
+      if (currentRequestId.current === requestId) {
+        currentRequestId.current = null;
+      }
       stopProgressLoop();
       audioController.stop();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentIndex, tweets]); // Reload when index or playlist changes
-
-  const startProgressLoop = () => {
-    stopProgressLoop();
-    progressInterval.current = window.setInterval(() => {
-      const ctx = audioController.getContext();
-      // Calculate elapsed time relative to when we started this specific track segment
-      const curr = ctx.currentTime - startTimeRef.current;
-      
-      if (curr >= duration && duration > 0) {
-        // Handled by onEnded, but just in case
-        setProgress(100);
-      } else {
-        setCurrentTime(curr);
-        setProgress((curr / duration) * 100);
-      }
-    }, 100);
-  };
-
-  const stopProgressLoop = () => {
-    if (progressInterval.current) {
-      clearInterval(progressInterval.current);
-      progressInterval.current = null;
-    }
-  };
-
-  const playAudio = async (buffer: AudioBuffer) => {
-    // Set start time to now
-    startTimeRef.current = audioController.getContext().currentTime;
-    
-    await audioController.play(buffer, () => {
-      handleTrackEnd();
-    });
-    
-    setIsPlaying(true);
-    startProgressLoop();
-  };
-
-  const handleTrackEnd = () => {
-    stopProgressLoop();
-    setIsPlaying(false);
-    setProgress(100);
-    // Auto-advance
-    handleNext();
-  };
+  }, [currentTweetId, currentTweet, geminiService, stopProgressLoop, playAudio]);
 
   const togglePlay = async () => {
     if (isLoading) return;
@@ -125,16 +186,14 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
     } else {
       await audioController.resumeContext();
       setIsPlaying(true);
-      startProgressLoop();
+      startProgressLoop(duration);
     }
-  };
-
-  const handleNext = () => {
-    setCurrentIndex((prev) => (prev + 1) % tweets.length);
   };
 
   const handlePrev = () => {
     setCurrentIndex((prev) => (prev - 1 + tweets.length) % tweets.length);
+    // Reset last loaded so the new track loads
+    lastLoadedTweetId.current = null;
   };
 
   const formatTime = (seconds: number) => {
@@ -143,11 +202,26 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // Show loading state when no tweets yet
+  if (!tweets || tweets.length === 0) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center bg-gradient-to-b from-gray-900 to-black text-white pb-[72px]">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-16 h-16 border-4 border-emerald-500/30 border-t-emerald-500 rounded-full animate-spin" />
+          <div className="text-center space-y-2">
+            <h3 className="text-lg font-semibold">Fetching Live Trends</h3>
+            <p className="text-sm text-gray-400">Searching X for what's trending...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="h-full flex flex-col bg-gradient-to-b from-gray-900 to-black text-white pb-24 relative">
-      {/* Feed Header - Reduced top padding */}
-      <div className="pt-20 px-6 pb-2 shrink-0 z-10">
-        <h3 className="text-xs font-bold tracking-widest text-gray-400 uppercase">Playing From {feedTitle}</h3>
+    <div className="h-full flex flex-col bg-gradient-to-b from-gray-900 to-black text-white pb-[72px] relative">
+      {/* Feed Header - Compact */}
+      <div className="pt-12 px-6 pb-1 shrink-0 z-10">
+        <h3 className="text-[10px] font-bold tracking-widest text-gray-400 uppercase">Playing From {feedTitle}</h3>
       </div>
 
       {/* Main Card Area - min-h-0 allows it to shrink */}
@@ -160,10 +234,10 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
       </div>
 
       {/* Player Controls - Spotify Style */}
-      <div className="px-6 pb-4 pt-2 shrink-0 space-y-4 z-20">
+      <div className="px-6 pb-2 pt-1 shrink-0 space-y-2 z-20">
         
         {/* Progress Bar */}
-        <div className="w-full space-y-1.5 group">
+        <div className="w-full space-y-1 group">
           <div className="relative w-full h-1 bg-gray-600 rounded-full overflow-hidden">
              <div 
                className="absolute top-0 left-0 h-full bg-white rounded-full transition-all duration-100 ease-linear group-hover:bg-echo-green"
@@ -179,28 +253,28 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
         {/* Buttons */}
         <div className="flex items-center justify-between px-2">
           <button className="text-gray-400 hover:text-white transition-colors">
-            <Shuffle size={20} />
+            <Shuffle size={18} />
           </button>
           
-          <div className="flex items-center gap-6">
+          <div className="flex items-center gap-5">
             <button 
               onClick={handlePrev}
               className="text-white hover:scale-110 transition-transform"
             >
-              <SkipBack size={28} fill="currentColor" />
+              <SkipBack size={24} fill="currentColor" />
             </button>
 
             <button 
               onClick={togglePlay}
-              className="w-16 h-16 bg-white rounded-full flex items-center justify-center text-black hover:scale-105 transition-transform shadow-lg shadow-white/10"
+              className="w-14 h-14 bg-white rounded-full flex items-center justify-center text-black hover:scale-105 transition-transform shadow-lg shadow-white/10"
               disabled={isLoading}
             >
                {isLoading ? (
-                 <div className="w-6 h-6 border-4 border-gray-300 border-t-black rounded-full animate-spin" />
+                 <div className="w-5 h-5 border-4 border-gray-300 border-t-black rounded-full animate-spin" />
                ) : isPlaying ? (
-                 <Pause size={30} fill="currentColor" />
+                 <Pause size={26} fill="currentColor" />
                ) : (
-                 <Play size={30} fill="currentColor" className="ml-1" />
+                 <Play size={26} fill="currentColor" className="ml-1" />
                )}
             </button>
 
@@ -208,12 +282,12 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
               onClick={handleNext}
               className="text-white hover:scale-110 transition-transform"
             >
-              <SkipForward size={28} fill="currentColor" />
+              <SkipForward size={24} fill="currentColor" />
             </button>
           </div>
 
           <button className="text-gray-400 hover:text-white transition-colors">
-            <Repeat size={20} />
+            <Repeat size={18} />
           </button>
         </div>
       </div>

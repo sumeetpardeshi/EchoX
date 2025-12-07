@@ -5,6 +5,13 @@ export interface User {
   avatar: string;
 }
 
+export interface TopTweet {
+  author: string;
+  handle: string;
+  content: string;
+  engagement?: string;
+}
+
 export interface Tweet {
   id: string;
   user: User;
@@ -14,6 +21,10 @@ export interface Tweet {
   retweets: number;
   imageUrl?: string;
   topic?: string;
+  // Podcast-style fields
+  podcastScript?: string;      // The podcast narration for this trend
+  trendTitle?: string;         // Short title of the trend
+  topTweets?: TopTweet[];      // Sample tweets driving this trend
 }
 
 export interface AudioState {

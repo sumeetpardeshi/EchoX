@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Tweet } from '../types';
-import { Loader2 } from 'lucide-react';
+import { Loader2, ChevronDown, ChevronUp, MessageCircle } from 'lucide-react';
 
 interface AudioCardProps {
   tweet: Tweet;
@@ -9,8 +9,14 @@ interface AudioCardProps {
 }
 
 const AudioCard: React.FC<AudioCardProps> = ({ tweet, summary, isLoading }) => {
+  const [showTopTweets, setShowTopTweets] = useState(false);
+  
   // Use tweet image if available, otherwise high-res user avatar, otherwise standard avatar
   const displayImage = tweet.imageUrl || tweet.user.avatar;
+  
+  // Check if this is a podcast-style trend
+  const isPodcastTrend = !!tweet.trendTitle || !!tweet.podcastScript;
+  const hasTopTweets = tweet.topTweets && tweet.topTweets.length > 0;
 
   return (
     <div className="w-full h-full flex flex-col items-center px-6 relative overflow-hidden">
@@ -25,47 +31,90 @@ const AudioCard: React.FC<AudioCardProps> = ({ tweet, summary, isLoading }) => {
       </div>
 
       {/* Main Content Wrapper */}
-      <div className="z-10 w-full max-w-sm flex flex-col h-full py-2">
+      <div className="z-10 w-full max-w-sm flex flex-col h-full py-1 overflow-hidden">
         
-        {/* Flexible Image Container - This shrinks if needed */}
-        <div className="flex-1 min-h-0 flex items-center justify-center py-4">
-          <div className="relative w-full h-full max-h-full aspect-square shadow-2xl rounded-xl overflow-hidden border border-white/10 bg-gray-900">
+        {/* Image Container */}
+        <div className="flex items-center justify-center py-1 shrink-0">
+          <div className="relative w-full max-h-[35vh] aspect-video shadow-2xl rounded-xl overflow-hidden border border-white/10 bg-gray-900">
              <img 
               src={displayImage} 
               alt="Content" 
               className="w-full h-full object-cover"
             />
-             {/* Badge */}
-            <div className="absolute top-3 left-3 bg-black/60 backdrop-blur-md px-3 py-1 rounded-full text-xs font-medium text-white border border-white/10">
+             {/* Topic Badge */}
+            <div className="absolute top-2.5 left-2.5 bg-black/60 backdrop-blur-md px-2.5 py-0.5 rounded-full text-[10px] font-medium text-white border border-white/10">
               {tweet.topic || 'Trending'}
             </div>
+            {/* Podcast Badge */}
+            {isPodcastTrend && (
+              <div className="absolute top-2.5 right-2.5 bg-emerald-500/80 backdrop-blur-md px-2 py-0.5 rounded-full text-[9px] font-bold text-white">
+                🎙️ LIVE
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Track Info & Summary - Fixed Height Content */}
-        <div className="shrink-0 space-y-4 pb-2">
-          <div className="flex justify-between items-start">
-            <div className="space-y-1">
-              <h2 className="text-2xl font-bold text-white leading-tight line-clamp-1">{tweet.user.name}</h2>
-              <p className="text-gray-400 text-sm font-medium">{tweet.user.handle}</p>
-            </div>
+        {/* Track Info & Summary */}
+        <div className="shrink-0 space-y-2 pt-2">
+          {/* Title */}
+          <div className="space-y-0.5">
+            <h2 className="text-lg font-bold text-white leading-tight line-clamp-2">
+              {tweet.trendTitle || tweet.user.name}
+            </h2>
+            {!isPodcastTrend && (
+              <p className="text-gray-400 text-[11px] font-medium">{tweet.user.handle}</p>
+            )}
+            {isPodcastTrend && (
+              <p className="text-emerald-400 text-[11px] font-medium">Trending on X • Now Playing</p>
+            )}
           </div>
 
-          {/* AI Summary / Lyrics View */}
-          <div className="relative min-h-[100px]">
+          {/* Podcast Script / Summary */}
+          <div className="relative">
              {isLoading ? (
-               <div className="flex flex-col items-center justify-center h-24 gap-3 text-echo-green animate-pulse">
-                 <Loader2 className="animate-spin w-6 h-6" />
-                 <span className="text-xs font-medium tracking-wide uppercase">Synthesizing...</span>
+               <div className="flex flex-col items-center justify-center h-14 gap-1.5 text-emerald-400 animate-pulse">
+                 <Loader2 className="animate-spin w-5 h-5" />
+                 <span className="text-[10px] font-medium tracking-wide uppercase">Generating Audio...</span>
                </div>
              ) : (
                <div className="space-y-2">
-                 <p className="text-lg font-medium text-white leading-relaxed line-clamp-4">
-                   {summary ? `"${summary}"` : tweet.content}
+                 <p className="text-[13px] font-medium text-white/90 leading-snug line-clamp-3">
+                   {summary || tweet.podcastScript || tweet.content}
                  </p>
                </div>
              )}
           </div>
+
+          {/* Top Tweets Section (collapsible) */}
+          {hasTopTweets && !isLoading && (
+            <div className="pt-1">
+              <button
+                onClick={() => setShowTopTweets(!showTopTweets)}
+                className="flex items-center gap-1.5 text-[11px] font-medium text-gray-400 hover:text-white transition-colors"
+              >
+                <MessageCircle size={12} />
+                <span>Top Tweets ({tweet.topTweets?.length})</span>
+                {showTopTweets ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+              </button>
+              
+              {showTopTweets && (
+                <div className="mt-2 space-y-2 max-h-32 overflow-y-auto">
+                  {tweet.topTweets?.slice(0, 3).map((t, idx) => (
+                    <div key={idx} className="bg-white/5 rounded-lg p-2 border border-white/10">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="text-[10px] font-semibold text-white">{t.author}</span>
+                        <span className="text-[9px] text-gray-500">{t.handle}</span>
+                        {t.engagement && (
+                          <span className="text-[8px] text-emerald-400 ml-auto">{t.engagement}</span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-gray-300 line-clamp-2">{t.content}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

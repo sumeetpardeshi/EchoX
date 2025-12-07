@@ -1,6 +1,6 @@
-import { GoogleGenAI, Modality } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { SYSTEM_PROMPT_SUMMARY } from "../constants";
-import { decode, decodeAudioData, audioController } from "./audioService";
+import { getXAIService, GrokVoice } from "./xaiService";
 
 interface CacheEntry {
   summary: string;
@@ -10,10 +10,18 @@ interface CacheEntry {
 export class GeminiService {
   private ai: GoogleGenAI;
   private cache: Map<string, CacheEntry>;
+  private ttsVoice: GrokVoice = 'Ara';
 
   constructor(apiKey: string) {
+    console.log('Initializing GeminiService with API key:', apiKey ? `${apiKey.substring(0, 10)}...` : 'MISSING');
     this.ai = new GoogleGenAI({ apiKey });
     this.cache = new Map();
+  }
+
+  // Set the Grok voice to use for TTS
+  setVoice(voice: GrokVoice) {
+    this.ttsVoice = voice;
+    console.log(`🎤 TTS voice set to: ${voice}`);
   }
 
   // Check if we have data for this tweet ID
@@ -23,69 +31,85 @@ export class GeminiService {
 
   // Step 1: Summarize the tweet text
   async summarizeTweet(tweetContent: string): Promise<string> {
+    console.log('Summarizing tweet:', tweetContent.substring(0, 50));
     try {
       const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-2.0-flash',
         contents: `Original Post: "${tweetContent}". \n\nInstruction: ${SYSTEM_PROMPT_SUMMARY}`,
       });
-      return response.text || "Could not generate summary.";
+      const summary = response.text || "Could not generate summary.";
+      console.log('Summary generated:', summary.substring(0, 50));
+      return summary;
     } catch (error) {
       console.error("Summarization error:", error);
       return "Error generating summary.";
     }
   }
 
-  // Step 2: Generate Audio from the summary
-  async generateAudio(text: string, voiceName: 'Kore' | 'Fenrir' | 'Puck' | 'Charon' = 'Kore'): Promise<AudioBuffer | null> {
+  // Step 2: Generate Audio from the summary using Grok TTS (xAI)
+  async generateAudio(text: string): Promise<AudioBuffer | null> {
+    console.log('🎤 Generating audio with Grok TTS for:', text.substring(0, 50));
+    
+    const xaiService = getXAIService();
+    
+    if (!xaiService) {
+      console.error('xAI service not available for TTS - check XAI_API_KEY');
+      return null;
+    }
+
     try {
-      const response = await this.ai.models.generateContent({
-        model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text }] }],
-        config: {
-          responseModalities: [Modality.AUDIO],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName },
-            },
-          },
-        },
+      const audioBuffer = await xaiService.textToSpeech({
+        text,
+        voice: this.ttsVoice,
+        responseFormat: 'wav', // WAV works well with Web Audio API
       });
 
-      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      
-      if (!base64Audio) {
-        throw new Error("No audio data returned");
+      if (audioBuffer) {
+        console.log('✅ Grok TTS audio buffer created, duration:', audioBuffer.duration.toFixed(2) + 's');
       }
-
-      const audioBytes = decode(base64Audio);
-      const audioBuffer = await decodeAudioData(
-        audioBytes, 
-        audioController.getContext(), 
-        24000, 
-        1
-      );
-
+      
       return audioBuffer;
-
     } catch (error) {
-      console.error("TTS error:", error);
+      console.error("Grok TTS error:", error);
       return null;
     }
   }
 
-  async processTweet(tweetId: string, content: string): Promise<CacheEntry | null> {
+  /**
+   * Process a tweet/trend for audio playback
+   * @param tweetId - Unique ID for caching
+   * @param content - The raw content (used if no podcastScript)
+   * @param podcastScript - Pre-written podcast narration (skips summarization if provided)
+   */
+  async processTweet(tweetId: string, content: string, podcastScript?: string): Promise<CacheEntry | null> {
+    console.log('🎙️ Processing content:', tweetId);
+    
     if (this.cache.has(tweetId)) {
+      console.log('✅ Returning cached data for:', tweetId);
       return this.cache.get(tweetId)!;
     }
 
-    const summary = await this.summarizeTweet(content);
-    const audioBuffer = await this.generateAudio(summary);
+    // Use podcast script directly if available, otherwise summarize
+    let textForAudio: string;
+    
+    if (podcastScript && podcastScript.length > 10) {
+      console.log('🎙️ Using pre-written podcast script');
+      textForAudio = podcastScript;
+    } else {
+      console.log('📝 No podcast script, generating summary...');
+      textForAudio = await this.summarizeTweet(content);
+    }
 
-    if (summary && audioBuffer) {
-      const entry = { summary, audioBuffer };
+    const audioBuffer = await this.generateAudio(textForAudio);
+
+    if (textForAudio && audioBuffer) {
+      console.log('✅ Successfully processed:', tweetId);
+      const entry = { summary: textForAudio, audioBuffer };
       this.cache.set(tweetId, entry);
       return entry;
     }
+    
+    console.error('❌ Failed to process:', tweetId, 'text:', !!textForAudio, 'audio:', !!audioBuffer);
     return null;
   }
 }

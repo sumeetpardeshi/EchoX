@@ -31,43 +31,76 @@ export async function decodeAudioData(
 }
 
 export class AudioController {
-  private ctx: AudioContext;
+  private ctx: AudioContext | null = null;
   private currentSource: AudioBufferSourceNode | null = null;
-  private gainNode: GainNode;
+  private gainNode: GainNode | null = null;
   
   constructor() {
-    this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-    this.gainNode = this.ctx.createGain();
-    this.gainNode.connect(this.ctx.destination);
+    // Defer AudioContext creation until first use (requires user interaction)
+    this.initContext();
+  }
+
+  private initContext() {
+    if (!this.ctx) {
+      try {
+        this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        this.gainNode = this.ctx.createGain();
+        this.gainNode.connect(this.ctx.destination);
+        console.log('🔊 AudioContext initialized, state:', this.ctx.state, 'sampleRate:', this.ctx.sampleRate);
+      } catch (e) {
+        console.error('❌ Failed to create AudioContext:', e);
+      }
+    }
+    return this.ctx;
   }
 
   async resumeContext() {
-    if (this.ctx.state === 'suspended') {
-      await this.ctx.resume();
+    const ctx = this.initContext();
+    if (ctx && ctx.state === 'suspended') {
+      console.log('🔊 Resuming suspended AudioContext...');
+      await ctx.resume();
+      console.log('🔊 AudioContext resumed, state:', ctx.state);
     }
   }
 
   async pause() {
-    if (this.ctx.state === 'running') {
+    if (this.ctx && this.ctx.state === 'running') {
       await this.ctx.suspend();
+      console.log('🔊 AudioContext paused');
     }
   }
 
   async play(buffer: AudioBuffer, onEnded?: () => void): Promise<void> {
     this.stop(); // Stop any currently playing audio node
     
-    await this.resumeContext();
+    const ctx = this.initContext();
+    if (!ctx || !this.gainNode) {
+      console.error('❌ AudioContext not available');
+      return;
+    }
 
-    const source = this.ctx.createBufferSource();
+    // IMPORTANT: Resume context (requires prior user interaction)
+    await this.resumeContext();
+    
+    console.log('🔊 Playing audio buffer:', {
+      duration: buffer.duration.toFixed(2) + 's',
+      sampleRate: buffer.sampleRate,
+      channels: buffer.numberOfChannels,
+      contextState: ctx.state,
+    });
+
+    const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(this.gainNode);
     
     source.onended = () => {
+      console.log('🔊 Audio playback ended');
       if (onEnded) onEnded();
     };
 
     source.start();
     this.currentSource = source;
+    console.log('🔊 Audio playback started');
   }
 
   stop() {
@@ -75,6 +108,7 @@ export class AudioController {
       try {
         this.currentSource.stop();
         this.currentSource.disconnect();
+        console.log('🔊 Audio stopped');
       } catch (e) {
         // Ignore errors if already stopped
       }
@@ -83,7 +117,11 @@ export class AudioController {
   }
   
   getContext() {
-    return this.ctx;
+    return this.initContext()!;
+  }
+
+  getState() {
+    return this.ctx?.state || 'closed';
   }
 }
 

@@ -15,20 +15,20 @@ const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange }) => {
 
   return (
     <div className="fixed bottom-0 left-0 w-full bg-black/95 backdrop-blur-md border-t border-white/10 z-50 pb-safe">
-      <div className="flex justify-around items-center h-20 max-w-md mx-auto">
+      <div className="flex justify-around items-center h-16 max-w-md mx-auto">
         <button onClick={() => onTabChange(Tab.Trending)} className={getIconClass(Tab.Trending)}>
-          <Flame size={24} strokeWidth={currentTab === Tab.Trending ? 2.5 : 2} />
-          <span className="text-[10px] font-medium">Trending</span>
+          <Flame size={22} strokeWidth={currentTab === Tab.Trending ? 2.5 : 2} />
+          <span className="text-[9px] font-medium">Trending</span>
         </button>
         
         <button onClick={() => onTabChange(Tab.MyFeed)} className={getIconClass(Tab.MyFeed)}>
-          <Library size={24} strokeWidth={currentTab === Tab.MyFeed ? 2.5 : 2} />
-          <span className="text-[10px] font-medium">My Feed</span>
+          <Library size={22} strokeWidth={currentTab === Tab.MyFeed ? 2.5 : 2} />
+          <span className="text-[9px] font-medium">My Feed</span>
         </button>
 
         <button onClick={() => onTabChange(Tab.Search)} className={getIconClass(Tab.Search)}>
-          <Search size={24} strokeWidth={currentTab === Tab.Search ? 2.5 : 2} />
-          <span className="text-[10px] font-medium">Search</span>
+          <Search size={22} strokeWidth={currentTab === Tab.Search ? 2.5 : 2} />
+          <span className="text-[9px] font-medium">Search</span>
         </button>
       </div>
     </div>
