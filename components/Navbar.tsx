@@ -21,9 +21,17 @@ const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange }) => {
           <span className="text-[9px] font-medium">Trending</span>
         </button>
         
-        <button onClick={() => onTabChange(Tab.MyFeed)} className={getIconClass(Tab.MyFeed)}>
-          <Library size={22} strokeWidth={currentTab === Tab.MyFeed ? 2.5 : 2} />
-          <span className="text-[9px] font-medium">My Feed</span>
+        <button 
+          onClick={() => {}} // Disabled
+          className="flex flex-col items-center gap-1 p-2 relative group cursor-not-allowed opacity-50"
+        >
+          <div className="relative">
+            <Library size={22} strokeWidth={2} className="text-gray-400" />
+            <span className="absolute -top-1 -right-4 bg-gray-800 text-[8px] text-gray-300 px-1 rounded-sm whitespace-nowrap border border-gray-700">
+              Soon
+            </span>
+          </div>
+          <span className="text-[9px] font-medium text-gray-400">My Feed</span>
         </button>
 
         <button onClick={() => onTabChange(Tab.Search)} className={getIconClass(Tab.Search)}>

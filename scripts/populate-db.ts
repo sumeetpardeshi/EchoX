@@ -44,7 +44,7 @@ async function fetchTrendingFromXAI(interests?: string[]): Promise<any[]> {
 
   const prompt = `You are a podcast host creating short audio snippets about what's trending on X/Twitter RIGHT NOW.
 
-Search across X/Twitter to find the TOP 5 ${searchScope}.
+Search across X/Twitter to find the TOP 15 ${searchScope}.
 
 For EACH trending topic, create a podcast-style narration (2-3 sentences) that:
 - Explains what the trend is about in an engaging, conversational tone
@@ -126,6 +126,8 @@ ${interests && interests.length > 0 ? `- Focus ONLY on topics related to: ${inte
             mode: 'on',
             sources: [{ type: 'x' }],
             return_citations: true,
+            fromDate: '2025-12-06',
+        toDate: '2025-12-07',
           },
         }),
       });

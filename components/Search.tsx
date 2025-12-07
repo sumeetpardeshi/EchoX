@@ -2,7 +2,11 @@ import React from 'react';
 import { Search as SearchIcon } from 'lucide-react';
 import { CATEGORIES } from '../constants';
 
-const Search: React.FC = () => {
+interface SearchProps {
+  onCategorySelect?: (category: string) => void;
+}
+
+const Search: React.FC<SearchProps> = ({ onCategorySelect }) => {
   return (
     <div className="w-full h-full bg-black text-white p-4 pt-8 pb-32 overflow-y-auto no-scrollbar">
       {/* Search Input */}
@@ -18,14 +22,27 @@ const Search: React.FC = () => {
         </div>
       </div>
 
-      {/* Browse All Section */}
-      <div className="space-y-4">
+      {/* Browse All Section - Coming Soon State */}
+      <div className="space-y-4 relative">
         <h2 className="text-lg font-bold">Browse all</h2>
-        <div className="grid grid-cols-2 gap-4">
+        
+        {/* Overlay */}
+        <div className="absolute inset-0 z-10 bg-black/60 backdrop-blur-[2px] flex flex-col items-center justify-center text-center p-4 -mx-4 rounded-xl border border-white/10 mt-10">
+          <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center mb-3 shadow-lg shadow-white/20">
+            <SearchIcon size={24} className="text-black" />
+          </div>
+          <h3 className="text-xl font-bold mb-1">Coming Soon</h3>
+          <p className="text-sm text-gray-300 max-w-[200px]">
+            We're building a new way to explore. Stay tuned!
+          </p>
+        </div>
+
+        {/* Disabled Grid */}
+        <div className="grid grid-cols-2 gap-4 opacity-40 pointer-events-none grayscale-[0.5]">
           {CATEGORIES.map((category) => (
             <div 
               key={category.id}
-              className={`${category.color} aspect-[1.6] rounded-md relative overflow-hidden p-3 cursor-pointer hover:opacity-90 transition-opacity`}
+              className={`${category.color} aspect-[1.6] rounded-md relative overflow-hidden p-3`}
             >
               <h3 className="text-lg font-bold leading-tight break-words w-2/3">{category.name}</h3>
               {/* Decorative rotated box to simulate image */}

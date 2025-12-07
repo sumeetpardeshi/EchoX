@@ -199,7 +199,7 @@ const AppContent: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <Zap size={16} className={isUsingLiveData ? 'text-echo-green' : 'text-gray-500'} />
                       <span className="text-xs font-medium text-gray-400">
-                        {isUsingLiveData ? 'Live data from X' : 'Using demo content'}
+                        Live data from X{/* {isUsingLiveData ? 'Live data from X' : 'Using demo content'} */}
                       </span>
                     </div>
                     {isUsingLiveData && (
@@ -223,10 +223,10 @@ const AppContent: React.FC = () => {
                     </button>
                   )}
 
-                  <button className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors text-left">
+                  {/* <button className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors text-left">
                     <Volume2 size={20} className="text-gray-400" />
                     <span className="text-sm font-medium">Audio Settings</span>
-                  </button>
+                  </button> */}
                   <button 
                     onClick={() => {
                       setIsMenuOpen(false);
@@ -256,10 +256,10 @@ const AppContent: React.FC = () => {
                       </p>
                     </div>
                   </button>
-                  <button className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors text-left">
+                  {/* <button className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors text-left">
                     <Settings size={20} className="text-gray-400" />
                     <span className="text-sm font-medium">Preferences</span>
-                  </button>
+                  </button> */}
                   <button className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors text-left">
                     <Info size={20} className="text-gray-400" />
                     <span className="text-sm font-medium">About EchoX</span>
@@ -295,7 +295,11 @@ const AppContent: React.FC = () => {
               )}
               
               {currentTab === Tab.Search && (
-                <Search />
+                <Search onCategorySelect={(category) => {
+                  console.log('Category selected:', category);
+                  updateInterests([category]);
+                  setCurrentTab(Tab.Trending);
+                }} />
               )}
             </main>
 
