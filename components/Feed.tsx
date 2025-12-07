@@ -113,6 +113,7 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
 
     // Generate unique request ID
     const requestId = `${currentTweetId}-${Date.now()}`;
+    const tweetIdForThisEffect = currentTweetId; // Capture tweetId for cleanup
     currentRequestId.current = requestId;
     
     const loadTrack = async () => {
@@ -192,14 +193,18 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
     loadTrack();
 
     return () => {
-      // Cleanup: invalidate this request
+      // Cleanup: invalidate this request only if it's still the current one
       if (currentRequestId.current === requestId) {
         currentRequestId.current = null;
       }
-      stopProgressLoop();
-      audioController.stop();
+      // Only stop audio if we're actually changing to a different tweet
+      // (currentTweetId will be the new value if we're changing tracks)
+      if (currentTweetId !== tweetIdForThisEffect) {
+        stopProgressLoop();
+        audioController.stop();
+      }
     };
-  }, [currentTweetId, currentTweet, geminiService, stopProgressLoop, playAudio, currentVoice]);
+  }, [currentTweetId, currentTweet, geminiService, stopProgressLoop]);
 
   const togglePlay = async () => {
     if (isLoading) return;
