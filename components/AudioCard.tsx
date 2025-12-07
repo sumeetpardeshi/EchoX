@@ -1,14 +1,16 @@
 import React, { useState } from 'react';
 import { Tweet } from '../types';
 import { Loader2, ChevronDown, ChevronUp, MessageCircle } from 'lucide-react';
+import { GrokVoice } from '../services/xaiService';
 
 interface AudioCardProps {
   tweet: Tweet;
   summary: string | null;
   isLoading: boolean;
+  voice: GrokVoice;
 }
 
-const AudioCard: React.FC<AudioCardProps> = ({ tweet, summary, isLoading }) => {
+const AudioCard: React.FC<AudioCardProps> = ({ tweet, summary, isLoading, voice }) => {
   const [showTopTweets, setShowTopTweets] = useState(false);
   
   // Use tweet image if available, otherwise high-res user avatar, otherwise standard avatar
@@ -67,6 +69,7 @@ const AudioCard: React.FC<AudioCardProps> = ({ tweet, summary, isLoading }) => {
             {isPodcastTrend && (
               <p className="text-emerald-400 text-[11px] font-medium">Trending on X • Now Playing</p>
             )}
+            <p className="text-emerald-300 text-[10px] font-semibold">Voice: {voice}</p>
           </div>
 
           {/* Podcast Script / Summary */}

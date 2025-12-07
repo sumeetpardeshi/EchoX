@@ -4,6 +4,7 @@ import { GeminiService } from '../services/geminiService';
 import { audioController } from '../services/audioService';
 import AudioCard from './AudioCard';
 import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat } from 'lucide-react';
+import { GrokVoice } from '../services/xaiService';
 
 interface FeedProps {
   tweets: Tweet[];
@@ -27,14 +28,17 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
   
   const progressInterval = useRef<number | null>(null);
   const startTimeRef = useRef<number>(0);
-  
+
   // Track the current request to prevent race conditions
   const currentRequestId = useRef<string | null>(null);
   const lastLoadedTweetId = useRef<string | null>(null);
 
+  const GROK_VOICES: GrokVoice[] = ['Ara', 'Rex', 'Sal', 'Eve', 'Una', 'Leo'];
+
   // Get current tweet safely
   const currentTweet = tweets[currentIndex];
   const currentTweetId = currentTweet?.id;
+  const currentVoice = GROK_VOICES[currentIndex % GROK_VOICES.length];
 
   // Define callbacks first (before useEffect)
   const stopProgressLoop = useCallback(() => {
@@ -108,6 +112,8 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
         return;
       }
 
+      geminiService.setVoice(currentVoice);
+
       const displayTitle = currentTweet.trendTitle || currentTweet.content.substring(0, 40);
       console.log('🎵 Loading track:', currentTweetId, displayTitle);
       
@@ -166,7 +172,7 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
 
     loadTrack();
 
-    return () => { 
+    return () => {
       // Cleanup: invalidate this request
       if (currentRequestId.current === requestId) {
         currentRequestId.current = null;
@@ -174,7 +180,7 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
       stopProgressLoop();
       audioController.stop();
     };
-  }, [currentTweetId, currentTweet, geminiService, stopProgressLoop, playAudio]);
+  }, [currentTweetId, currentTweet, geminiService, stopProgressLoop, playAudio, currentVoice]);
 
   const togglePlay = async () => {
     if (isLoading) return;
@@ -226,10 +232,11 @@ const Feed: React.FC<FeedProps> = ({ tweets, geminiService, feedTitle }) => {
 
       {/* Main Card Area - min-h-0 allows it to shrink */}
       <div className="flex-1 min-h-0 w-full">
-        <AudioCard 
-          tweet={tweets[currentIndex]} 
-          summary={summary} 
-          isLoading={isLoading} 
+        <AudioCard
+          tweet={tweets[currentIndex]}
+          summary={summary}
+          isLoading={isLoading}
+          voice={currentVoice}
         />
       </div>
 
