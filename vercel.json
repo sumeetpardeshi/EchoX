@@ -8,12 +8,6 @@
       "destination": "/app/api/$1"
     }
   ],
-  "functions": {
-    "app/api/**/*.ts": {
-      "runtime": "nodejs20.x",
-      "maxDuration": 300
-    }
-  },
   "crons": [
     {
       "path": "/api/cron/trending",
